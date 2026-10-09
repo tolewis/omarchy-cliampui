@@ -687,6 +687,17 @@ Item {
     catalogPlayProcess.command = [cliampPath].concat(Model.providerLoadArgs(activeProviderKey, id))
     catalogPlayProcess.running = true
   }
+
+  // The box under the transport searches the active library, not just the
+  // playlist names already on screen.
+  function searchCatalog(query) {
+    if (!catalogMode) return
+    var q = String(query || "")
+    if (q.length === 0) { refreshCatalog(); return }
+    if (catalogSearchProcess.running) return
+    catalogSearchProcess.command = [cliampPath].concat(Model.providerSearchArgs(activeProviderKey, q))
+    catalogSearchProcess.running = true
+  }
   readonly property string providerSummary: Model.providerSummary(providers)
 
   // Server rows on their own. Saved playlists are matched locally and merged in front,
@@ -814,6 +825,15 @@ Item {
     id: catalogPlayProcess
     command: []
     onExited: settleTimer.restart()
+  }
+
+  Process {
+    id: catalogSearchProcess
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.providerCatalog = Model.parseProviderSearch(text, root.activeProviderKey)
+    }
   }
 
   Process {

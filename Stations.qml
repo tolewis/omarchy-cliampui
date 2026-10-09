@@ -89,7 +89,10 @@ Column {
     id: filterDebounce
     interval: 260
     repeat: false
-    onTriggered: root.filterText = filterField.text
+    onTriggered: {
+      root.filterText = filterField.text
+      if (root.catalogMode && root.service) root.service.searchCatalog(filterField.text)
+    }
   }
 
   // Stations are few, but a long name must never hide the rest of the panel, so the
@@ -124,9 +127,13 @@ Column {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.catalogMode
-          ? root.service.playCatalogItem(String(modelData.id || ""))
-          : root.service.playStation(String(modelData.id || ""))
+        onClicked: {
+          if (!root.catalogMode) { root.service.playStation(String(modelData.id || "")); return }
+          var playId = String(modelData.id || "")
+          if (modelData.uri && String(modelData.uri).indexOf("spotify:album:") === 0)
+            playId = String(modelData.uri).substring("spotify:album:".length)
+          root.service.playCatalogItem(playId)
+        }
       }
 
       RowLayout {

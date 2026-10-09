@@ -250,6 +250,8 @@ directory holds the one shot sample rate the daemon reads at startup, and it goe
 
 ## Development
 
+CI (`.github/workflows/lint.yml`) runs `scripts/lint-qml.sh` over the root QML files with qmllint, then `deno test --allow-read tests/model.test.js`.
+
 `Model.js` is pure JavaScript with no QML imports, so it is covered by tests:
 
 ```bash

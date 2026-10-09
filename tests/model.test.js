@@ -3,7 +3,7 @@
 
 const source = Deno.readTextFileSync(new URL("../Model.js", import.meta.url))
 const Model = new Function(
-  source + "; return { defaultStatus, parseStatus, rateFromNodeProps, sinkRateFromPactl, parseSinkAvailability, parsePlaylists, parseResults, matchPlaylists, messageKind, ackError, asBool, parseLyrics, activeLyricIndex, latencyMs, isSupportedOutputRate, parseBands, coverArtUrlFromStreamPath, transcodedFromPath, bluetoothCodecLabel, verdict, formatTime, elideError, MAX_ERROR_CHARS, RECENTLY_PLAYED, parseStations, stationActiveIndex, parseProviders, providerSummary, stationListArgs, stationPlayArgs, historyPlayArgs, providerListArgs, providerSwitchArgs, parseProviderSearch, providerSearchArgs, trackPlayArgs, filterStations }"
+  source + "; return { defaultStatus, parseStatus, rateFromNodeProps, sinkRateFromPactl, parseSinkAvailability, parsePlaylists, parseResults, matchPlaylists, messageKind, ackError, asBool, parseLyrics, activeLyricIndex, latencyMs, isSupportedOutputRate, parseBands, coverArtUrlFromStreamPath, transcodedFromPath, bluetoothCodecLabel, verdict, formatTime, elideError, MAX_ERROR_CHARS, RECENTLY_PLAYED, parseStations, stationActiveIndex, parseProviders, providerSummary, stationListArgs, stationPlayArgs, historyPlayArgs, providerListArgs, providerSwitchArgs, parseProviderSearch, providerSearchArgs, trackPlayArgs, filterStations, parseProviderPlaylists }"
 )()
 
 let failures = 0
@@ -415,6 +415,8 @@ const srch = JSON.stringify({version: 2, ok: true, job: {state: "succeeded", res
   {id: "def", title: "Two", artist: "Art"},
   {id: "", title: "no id"}
 ]}}})
+const pls = JSON.stringify({ok:true, job:{result:{playlists:[{id:"abc", name:"Dance", track_count:18}]}}})
+check("provider playlists", Model.parseProviderPlaylists(pls)[0].name, "Dance")
 check("provider search rows", Model.parseProviderSearch(srch).length, 2)
 check("provider search uri fallback", Model.parseProviderSearch(srch)[1].uri, "spotify:track:def")
 const spArgs = Model.providerSearchArgs("spotify", "daft")

@@ -746,6 +746,36 @@ function jobPayload(raw) {
   return data
 }
 
+function parseProviderPlaylists(raw) {
+  var out = []
+  var data = jobPayload(raw)
+  if (!data) return out
+  var list = data.playlists
+  if (!list || list.length === undefined) return out
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i]
+    if (!p || !p.id) continue
+    out.push({
+      id: String(p.id),
+      name: String(p.name || p.id),
+      artist: String(p.section || ""),
+      kind: "playlist",
+      songCount: numberOr(p.track_count, 0)
+    })
+  }
+  return out
+}
+
+function providerPlaylistArgs(key) {
+  return ["remote", "call", "--wait", "provider.playlists", "--params",
+    JSON.stringify({provider: String(key || ""), limit: 50})]
+}
+
+function providerLoadArgs(key, id) {
+  return ["remote", "call", "--wait", "provider.load", "--params",
+    JSON.stringify({provider: String(key || ""), playlist: String(id || "")})]
+}
+
 function providerSearchArgs(key, query) {
   var payload = {
     provider: String(key || ""),

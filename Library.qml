@@ -225,7 +225,7 @@ Column {
     Text {
       textFormat: Text.PlainText
       width: parent.width
-      text: "Nothing matched"
+      text: root.service && root.service.libraryBusy ? "Searching..." : "Nothing matched"
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall

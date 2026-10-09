@@ -666,6 +666,27 @@ Item {
     }
     return ""
   }
+  property var providerCatalog: []
+  // Radio stays in the station list. Spotify and the other libraries replace
+  // that list with their own playlists.
+  readonly property bool catalogMode: activeProviderKey === "spotify"
+    || activeProviderKey === "local" || activeProviderKey === "podcast"
+  property bool libraryBusy: false
+
+  onActiveProviderKeyChanged: refreshCatalog()
+
+  function refreshCatalog() {
+    if (!catalogMode) { providerCatalog = []; return }
+    if (catalogProcess.running) return
+    catalogProcess.command = [cliampPath].concat(Model.providerPlaylistArgs(activeProviderKey))
+    catalogProcess.running = true
+  }
+
+  function playCatalogItem(id) {
+    if (!id || catalogPlayProcess.running) return
+    catalogPlayProcess.command = [cliampPath].concat(Model.providerLoadArgs(activeProviderKey, id))
+    catalogPlayProcess.running = true
+  }
   readonly property string providerSummary: Model.providerSummary(providers)
 
   // Server rows on their own. Saved playlists are matched locally and merged in front,
@@ -717,6 +738,7 @@ Item {
       _recomputeResults()
       return
     }
+    libraryBusy = true
     providerSearchProcess.command = [cliampPath].concat(Model.providerSearchArgs(key, libraryQuery))
     providerSearchProcess.running = true
   }
@@ -728,6 +750,10 @@ Item {
       // track instead of replacing the queue with the list.
       if (String(item.name) === Model.RECENTLY_PLAYED) { historyPlay(); return }
       loadPlaylist(String(item.name))
+      return
+    }
+    if (item.uri && item.uri.indexOf("spotify:album:") === 0) {
+      playCatalogItem(item.uri.substring("spotify:album:".length))
       return
     }
     if (item.uri && item.uri.length > 0) {
@@ -768,9 +794,26 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         root._providerRows = Model.parseProviderSearch(text, root.activeProviderKey)
+        root.libraryBusy = false
         root._recomputeResults()
       }
     }
+    onExited: root.libraryBusy = false
+  }
+
+  Process {
+    id: catalogProcess
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.providerCatalog = Model.parseProviderPlaylists(text)
+    }
+  }
+
+  Process {
+    id: catalogPlayProcess
+    command: []
+    onExited: settleTimer.restart()
   }
 
   Process {

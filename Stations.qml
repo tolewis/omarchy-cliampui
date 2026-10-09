@@ -20,8 +20,11 @@ Column {
   property string filterText: ""
 
   readonly property color dim: Qt.darker(foreground, 1.4)
+  readonly property bool catalogMode: !!(service && service.catalogMode)
   readonly property var stations: service ? service.stations : []
-  readonly property var filtered: Model.filterStations(stations, filterText)
+  readonly property var catalog: service && service.providerCatalog ? service.providerCatalog : []
+  readonly property var rows: catalogMode ? catalog : stations
+  readonly property var filtered: Model.filterStations(rows, filterText)
 
   // An answered-but-empty registry is the only case that opens the section with no
   // rows. stationsLoaded would be the right flag; until it exists, the service
@@ -47,7 +50,7 @@ Column {
   PanelSectionHeader {
     // The count is the filtered count, which is the full count while the filter is
     // empty, so one binding covers both.
-    text: "STATIONS (" + root.filtered.length + ")"
+    text: (root.catalogMode ? String(root.service.activeProviderKey).toUpperCase() : "STATIONS") + " (" + root.filtered.length + ")"
     foreground: root.foreground
     fontFamily: root.fontFamily
   }
@@ -73,10 +76,10 @@ Column {
   TextField {
     id: filterField
     width: parent.width
-    placeholderText: "Filter stations"
+    placeholderText: root.catalogMode ? "Filter playlists" : "Filter stations"
     foreground: root.foreground
     font.family: root.fontFamily
-    visible: root.stations.length > 0
+    visible: root.rows.length > 0
 
     Keys.onEscapePressed: filterField.clear()
     onTextChanged: filterDebounce.restart()
@@ -121,7 +124,9 @@ Column {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.service.playStation(String(modelData.id || ""))
+        onClicked: root.catalogMode
+          ? root.service.playCatalogItem(String(modelData.id || ""))
+          : root.service.playStation(String(modelData.id || ""))
       }
 
       RowLayout {

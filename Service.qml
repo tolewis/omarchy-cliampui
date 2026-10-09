@@ -137,18 +137,19 @@ Item {
   property int pendingPlaying: -1
   readonly property bool showPlaying: pendingPlaying === -1 ? isPlaying : pendingPlaying === 1
 
+  function daemonCmd(verb) {
+    // The raw socket {"cmd":...} packet is rejected by the v2 daemon
+    // (invalid_version). A successful write is not a successful command.
+    if (actionProcess.running) return
+    actionProcess.command = [cliampPath, verb]
+    actionProcess.running = true
+    settleTimer.restart()
+  }
+
   function playPause() {
     pendingPlaying = isPlaying ? 0 : 1
     playHold.restart()
-    if (send('{"cmd":"toggle"}')) { settleTimer.restart(); return }
-    // MPRIS can go stale after a daemon restart; the CLI uses the live socket.
-    if (!actionProcess.running) {
-      actionProcess.command = [cliampPath, "toggle"]
-      actionProcess.running = true
-      settleTimer.restart()
-      return
-    }
-    if (running) player.togglePlaying()
+    daemonCmd("toggle")
   }
 
   // Never let an optimistic flip stick if cliamp disagrees.
@@ -162,39 +163,9 @@ Item {
   // A stream has no queue position to move, so the socket verb does nothing useful on
   // one. The CLI verb is what moves the station: on the patched daemon it cycles
   // stations, and on anything else it stays the same no-op it is today.
-  function next() {
-    if (isStream) {
-      if (actionProcess.running) return
-      actionProcess.command = [cliampPath, "next"]
-      actionProcess.running = true
-      return
-    }
-    if (send('{"cmd":"next"}')) { settleTimer.restart(); return }
-    if (!actionProcess.running) {
-      actionProcess.command = [cliampPath, "next"]
-      actionProcess.running = true
-      settleTimer.restart()
-      return
-    }
-    if (running) player.next()
-  }
+  function next() { daemonCmd("next") }
 
-  function previous() {
-    if (isStream) {
-      if (actionProcess.running) return
-      actionProcess.command = [cliampPath, "prev"]
-      actionProcess.running = true
-      return
-    }
-    if (send('{"cmd":"prev"}')) { settleTimer.restart(); return }
-    if (!actionProcess.running) {
-      actionProcess.command = [cliampPath, "prev"]
-      actionProcess.running = true
-      settleTimer.restart()
-      return
-    }
-    if (running) player.previous()
-  }
+  function previous() { daemonCmd("prev") }
 
   // Measured on 1.63.2: the socket seek takes a delta, not a position, whatever
   // `cliamp seek --help` says. The delta comes off the interpolated position rather than
@@ -844,16 +815,7 @@ Item {
 
   // Stop has no button in the panel transport row, so the menu gets it here: the
   // socket verb first, then the CLI for a daemon that lacks it.
-  function stop() {
-    if (send('{"cmd":"stop"}')) {
-      settleTimer.restart()
-      return
-    }
-    if (actionProcess.running) return
-    actionProcess.command = [cliampPath, "stop"]
-    actionProcess.running = true
-    settleTimer.restart()
-  }
+  function stop() { daemonCmd("stop") }
 
   // Volume is cliamp's PipeWire stream volume, moved exactly the way the stock audio
   // panel moves a sink: a property on a tracked node, pushed both ways, so a drag has

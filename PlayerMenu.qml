@@ -15,7 +15,7 @@ Popup {
   property color foreground: Color.popups.text
   property string fontFamily: Style.font.family
 
-  readonly property color dim: Qt.darker(foreground, 1.4)
+  readonly property color dimColor: Qt.darker(foreground, 1.4)
 
   function toggle() { opened ? close() : open() }
 
@@ -82,7 +82,7 @@ Popup {
           anchors.leftMargin: Style.space(10)
           textFormat: Text.PlainText
           text: modelData.label
-          color: modelData.enabled ? root.foreground : root.dim
+          color: modelData.enabled ? root.foreground : root.dimColor
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
         }

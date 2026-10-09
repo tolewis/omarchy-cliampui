@@ -196,6 +196,13 @@ Panel {
             fontFamily: root.fontFamily
           }
 
+          Stations {
+            width: parent.width
+            service: cliamp
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
           Library {
             id: library
             width: parent.width

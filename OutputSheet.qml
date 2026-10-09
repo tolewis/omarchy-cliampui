@@ -187,4 +187,50 @@ Column {
       }
     }
   }
+
+  // The provider the daemon resolves library tracks through, and whether it is
+  // authorised. Clicking the line runs the switch. Hidden while the daemon reports
+  // no providers, which is also the answer an unpatched cliamp gives.
+  CursorSurface {
+    width: parent.width
+    foreground: root.foreground
+    visible: !!(root.service && root.service.providerSummary.length > 0)
+    implicitHeight: providerLabel.implicitHeight + Style.spacing.rowPaddingX
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: root.service.cycleProvider()
+    }
+
+    RowLayout {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(8)
+
+      Text {
+        id: providerLabel
+        textFormat: Text.PlainText
+        Layout.fillWidth: true
+        text: root.service ? root.service.providerSummary : ""
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        elide: Text.ElideRight
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        text: "Switch"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.underline: true
+      }
+    }
+  }
 }

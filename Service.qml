@@ -152,12 +152,27 @@ Item {
     onTriggered: root.pendingPlaying = -1
   }
 
+  // A stream has no queue position to move, so the socket verb does nothing useful on
+  // one. The CLI verb is what moves the station: on the patched daemon it cycles
+  // stations, and on anything else it stays the same no-op it is today.
   function next() {
+    if (isStream) {
+      if (actionProcess.running) return
+      actionProcess.command = [cliampPath, "next"]
+      actionProcess.running = true
+      return
+    }
     if (send('{"cmd":"next"}')) { settleTimer.restart(); return }
     if (running) player.next()
   }
 
   function previous() {
+    if (isStream) {
+      if (actionProcess.running) return
+      actionProcess.command = [cliampPath, "prev"]
+      actionProcess.running = true
+      return
+    }
     if (send('{"cmd":"prev"}')) { settleTimer.restart(); return }
     if (running) player.previous()
   }
@@ -414,6 +429,8 @@ Item {
     readSinkAvailability()
     readPlaylists()
     readLibrary()
+    readStations()
+    readProviders()
   }
 
   // ---- PipeWire routing and the signal verdict ----
@@ -643,6 +660,16 @@ Item {
   property var results: []
   property string libraryQuery: ""
 
+  // Radio stations as the daemon reports them. Empty is the honest answer on a daemon
+  // without the stations op, and it is what hides the section in the panel.
+  property var stations: []
+  readonly property int activeStationIndex: Model.stationActiveIndex(stations, status.path)
+
+  // The provider the daemon resolves library tracks through, from provider.list. A
+  // daemon without providers answers nothing, so the footer line hides itself.
+  property var providers: []
+  readonly property string providerSummary: Model.providerSummary(providers)
+
   // Server rows on their own. Saved playlists are matched locally and merged in front,
   // so a playlist list arriving late does not need a second server round trip.
   property var _libraryRows: []
@@ -680,7 +707,13 @@ Item {
 
   function playResult(item) {
     if (!item) return
-    if (item.kind === "playlist") { loadPlaylist(String(item.name)); return }
+    if (item.kind === "playlist") {
+      // Its first entry is the most recently played track, so the row replays that
+      // track instead of replacing the queue with the list.
+      if (String(item.name) === Model.RECENTLY_PLAYED) { historyPlay(); return }
+      loadPlaylist(String(item.name))
+      return
+    }
     if (albumPlayProcess.running || !item.id) return
     albumPlayProcess.command = [libraryHelper,
       item.kind === "song" ? "play-song" : "play", String(item.id)]
@@ -861,6 +894,86 @@ Item {
     command: []
     // A cliamp verb takes a moment to land, so the panel re-reads rather than guessing.
     onExited: settleTimer.restart()
+  }
+
+  // ---- radio stations ----
+
+  // Read the way the playlist list is read: one process, empty output hides the
+  // section. On a daemon without the stations op the verb is unknown, the process
+  // exits non-zero with no stdout, and the panel is unchanged.
+  function readStations() {
+    if (stationListProcess.running) return
+    stationListProcess.command = [cliampPath].concat(Model.stationListArgs())
+    stationListProcess.running = true
+  }
+
+  Process {
+    id: stationListProcess
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.stations = Model.parseStations(text)
+    }
+  }
+
+  function playStation(id) {
+    if (stationPlayProcess.running) return
+    stationPlayProcess.command = [cliampPath].concat(Model.stationPlayArgs(id))
+    stationPlayProcess.running = true
+  }
+
+  Process {
+    id: stationPlayProcess
+    command: []
+    onExited: settleTimer.restart()
+  }
+
+  // ---- history ----
+
+  function historyPlay() {
+    if (historyPlayProcess.running) return
+    historyPlayProcess.command = [cliampPath].concat(Model.historyPlayArgs())
+    historyPlayProcess.running = true
+  }
+
+  Process {
+    id: historyPlayProcess
+    command: []
+    onExited: settleTimer.restart()
+  }
+
+  // ---- providers ----
+
+  function readProviders() {
+    if (providerListProcess.running) return
+    providerListProcess.command = [cliampPath].concat(Model.providerListArgs())
+    providerListProcess.running = true
+  }
+
+  Process {
+    id: providerListProcess
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.providers = Model.parseProviders(text)
+    }
+  }
+
+  // The switch is a click-through on the footer line. Re-read after, because the
+  // authorisation state on that line is what the operator is looking at.
+  function cycleProvider() {
+    if (providerSwitchProcess.running) return
+    providerSwitchProcess.command = [cliampPath].concat(Model.providerSwitchArgs())
+    providerSwitchProcess.running = true
+  }
+
+  Process {
+    id: providerSwitchProcess
+    command: []
+    onExited: {
+      settleTimer.restart()
+      root.readProviders()
+    }
   }
 
   Timer {

@@ -141,6 +141,13 @@ Item {
     pendingPlaying = isPlaying ? 0 : 1
     playHold.restart()
     if (send('{"cmd":"toggle"}')) { settleTimer.restart(); return }
+    // MPRIS can go stale after a daemon restart; the CLI uses the live socket.
+    if (!actionProcess.running) {
+      actionProcess.command = [cliampPath, "toggle"]
+      actionProcess.running = true
+      settleTimer.restart()
+      return
+    }
     if (running) player.togglePlaying()
   }
 
@@ -163,6 +170,12 @@ Item {
       return
     }
     if (send('{"cmd":"next"}')) { settleTimer.restart(); return }
+    if (!actionProcess.running) {
+      actionProcess.command = [cliampPath, "next"]
+      actionProcess.running = true
+      settleTimer.restart()
+      return
+    }
     if (running) player.next()
   }
 
@@ -174,6 +187,12 @@ Item {
       return
     }
     if (send('{"cmd":"prev"}')) { settleTimer.restart(); return }
+    if (!actionProcess.running) {
+      actionProcess.command = [cliampPath, "prev"]
+      actionProcess.running = true
+      settleTimer.restart()
+      return
+    }
     if (running) player.previous()
   }
 
@@ -823,6 +842,19 @@ Item {
     settleTimer.restart()
   }
 
+  // Stop has no button in the panel transport row, so the menu gets it here: the
+  // socket verb first, then the CLI for a daemon that lacks it.
+  function stop() {
+    if (send('{"cmd":"stop"}')) {
+      settleTimer.restart()
+      return
+    }
+    if (actionProcess.running) return
+    actionProcess.command = [cliampPath, "stop"]
+    actionProcess.running = true
+    settleTimer.restart()
+  }
+
   // Volume is cliamp's PipeWire stream volume, moved exactly the way the stock audio
   // panel moves a sink: a property on a tracked node, pushed both ways, so a drag has
   // no subprocess and no poll behind it to fight. cliamp's own gain stays at unity.
@@ -937,6 +969,42 @@ Item {
   function openPlayer() {
     if (running) return
     Quickshell.execDetached(["uwsm-app", "--", "foot", "--title=cliamp", cliampPath])
+  }
+
+  // The menu's Open TUI entry, offered only while the daemon is stopped, because the
+  // TUI is what starts it.
+  function openTui() {
+    if (tuiProcess.running) return
+    tuiProcess.command = ["foot", "-e", cliampPath]
+    tuiProcess.running = true
+  }
+
+  // The menu is the only way to stop or restart the headless daemon from the bar, so
+  // the unit goes through its own one-shot process and the poll re-reads on exit.
+  readonly property string systemctlPath: "/usr/bin/systemctl"
+
+  function quitDaemon() {
+    if (sysProcess.running) return
+    sysProcess.command = [systemctlPath, "--user", "stop", "cliamp-daemon"]
+    sysProcess.running = true
+  }
+
+  function restartDaemon() {
+    if (sysProcess.running) return
+    sysProcess.command = [systemctlPath, "--user", "restart", "cliamp-daemon"]
+    sysProcess.running = true
+  }
+
+  Process {
+    id: sysProcess
+    command: []
+    onExited: settleTimer.restart()
+  }
+
+  Process {
+    id: tuiProcess
+    command: []
+    onExited: settleTimer.restart()
   }
 
   Process {

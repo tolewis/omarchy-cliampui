@@ -203,37 +203,7 @@ Column {
       cursorShape: Qt.PointingHandCursor
       onClicked: root.service.cycleProvider()
     }
-  }
-
-  // One chip per provider: the name, underlined while active. A click switches
-  // to that provider directly, no cycling past the ones in between.
-  Flow {
-    width: parent.width
-    spacing: Style.space(10)
-    visible: !!(root.service && root.service.providers && root.service.providers.length > 0)
-    topPadding: Style.space(2)
-
-    Repeater {
-      model: root.service ? (root.service.providers || []) : []
-
-      Text {
-        required property var modelData
-        textFormat: Text.PlainText
-        text: (modelData && modelData.key ? modelData.key : "") + (modelData && modelData.authed === false ? " (sign in)" : "")
-        color: modelData && modelData.active === true ? root.foreground : root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        font.underline: modelData && modelData.active === true
-
-        MouseArea {
-          anchors.fill: parent
-          hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          onClicked: if (root.service) root.service.switchProvider(String(parent.modelData ? parent.modelData.key : ""))
-        }
-      }
-    }
-
+  
     RowLayout {
       anchors.left: parent.left
       anchors.right: parent.right
@@ -260,6 +230,36 @@ Column {
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         font.underline: true
+      }
+    }
+  }
+
+  // One chip per provider: the name, underlined while active. A click switches
+  // to that provider directly, no cycling past the ones in between. Hidden
+  // entirely when the daemon reports no providers.
+  Flow {
+    width: parent.width
+    spacing: Style.space(10)
+    visible: !!(root.service && root.service.providers && root.service.providers.length > 0)
+
+    Repeater {
+      model: root.service ? (root.service.providers || []) : []
+
+      Text {
+        required property var modelData
+        textFormat: Text.PlainText
+        text: (modelData && modelData.key ? modelData.key : "") + (modelData && modelData.authed === false ? " (sign in)" : "")
+        color: modelData && modelData.active === true ? root.foreground : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.underline: modelData && modelData.active === true
+
+        MouseArea {
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: if (root.service) root.service.switchProvider(String(parent.modelData ? parent.modelData.key : ""))
+        }
       }
     }
   }

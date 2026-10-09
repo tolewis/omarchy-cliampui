@@ -484,8 +484,32 @@ function parseProviders(raw) {
   return out
 }
 
+
+// jobResultProviders unwraps the finished-job payload, string or object.
+function jobResultResults(result) {
+  if (typeof result === "string") {
+    try { return JSON.parse(result) } catch (e) { return null }
+  }
+  return result && typeof result === "object" ? result : null
+}
+
+function jobResultProviders(result) {
+  var jres = jobResultResults(result)
+  if (!jres) return null
+  if (jres.provider_statuses && jres.provider_statuses.length !== undefined) return jres.provider_statuses
+  if (jres.providers && jres.providers.length !== undefined) {
+    // The legacy rows carry no auth state; prefer statuses when present.
+    return jres.provider_statuses && jres.provider_statuses.length !== undefined ? jres.provider_statuses : jres.providers
+  }
+  return null
+}
 function providerList(data) {
   if (!data || typeof data !== "object") return null
+  // A --wait job answers with the payload under job.result.
+  if (data.job && typeof data.job === "object" && data.job.result) {
+    var fromJob = jobResultProviders(data.job.result)
+    if (fromJob) return fromJob
+  }
   if (data.provider_statuses && data.provider_statuses.length !== undefined) return data.provider_statuses
   if (data.providers && data.providers.length !== undefined) return data.providers
   if (data.length !== undefined) return data
@@ -530,16 +554,16 @@ function stationPlayArgs(id) {
 }
 
 function historyPlayArgs() {
-  return ["remote", "call", "history.play", "--params", "{\"index\":0}"]
+  return ["remote", "call", "--wait", "history.play", "--params", "{\"index\":0}"]
 }
 
 function providerListArgs() {
-  return ["remote", "call", "provider.list"]
+  return ["remote", "call", "--wait", "provider.list"]
 }
 
 function providerSwitchArgs(key) {
   var payload = typeof key === "string" && key.length > 0 ? {key: key} : {}
-  return ["remote", "call", "provider.switch", "--params", JSON.stringify(payload)]
+  return ["remote", "call", "--wait", "provider.switch", "--params", JSON.stringify(payload)]
 }
 
 function trim(text) {

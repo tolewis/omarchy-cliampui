@@ -3,7 +3,7 @@
 
 const source = Deno.readTextFileSync(new URL("../Model.js", import.meta.url))
 const Model = new Function(
-  source + "; return { defaultStatus, parseStatus, rateFromNodeProps, sinkRateFromPactl, parseSinkAvailability, parsePlaylists, parseResults, matchPlaylists, messageKind, ackError, asBool, parseLyrics, activeLyricIndex, latencyMs, isSupportedOutputRate, parseBands, coverArtUrlFromStreamPath, transcodedFromPath, bluetoothCodecLabel, verdict, formatTime, elideError, MAX_ERROR_CHARS, RECENTLY_PLAYED, parseStations, stationActiveIndex, parseProviders, providerSummary, stationListArgs, stationPlayArgs, historyPlayArgs, providerListArgs, providerSwitchArgs, parseProviderSearch, providerSearchArgs, trackPlayArgs }"
+  source + "; return { defaultStatus, parseStatus, rateFromNodeProps, sinkRateFromPactl, parseSinkAvailability, parsePlaylists, parseResults, matchPlaylists, messageKind, ackError, asBool, parseLyrics, activeLyricIndex, latencyMs, isSupportedOutputRate, parseBands, coverArtUrlFromStreamPath, transcodedFromPath, bluetoothCodecLabel, verdict, formatTime, elideError, MAX_ERROR_CHARS, RECENTLY_PLAYED, parseStations, stationActiveIndex, parseProviders, providerSummary, stationListArgs, stationPlayArgs, historyPlayArgs, providerListArgs, providerSwitchArgs, parseProviderSearch, providerSearchArgs, trackPlayArgs, filterStations }"
 )()
 
 let failures = 0
@@ -351,6 +351,22 @@ check("an unknown path has no active station",
   Model.stationActiveIndex(Model.parseStations(stationsOk), "https://other.example/stream"), -1)
 check("no path means nothing is active", Model.stationActiveIndex(Model.parseStations(stationsOk), ""), -1)
 check("no stations means no active station", Model.stationActiveIndex([], "https://x.example"), -1)
+
+// The panel's station filter runs client-side, so it has to answer on a daemon
+// that cannot search. Rows without an artist still match on the name.
+const filterRows = [
+  { id: "radio:lofi", name: "Lofi", url: "https://radio.example/lofi", artist: "" },
+  { id: "radio:jazz", name: "Blue Note Late Night", url: "https://radio.example/jazz", artist: "Blue Note" }
+]
+
+check("an empty query keeps every station", Model.filterStations(filterRows, ""), filterRows)
+check("a blank query keeps every station", Model.filterStations(filterRows, "   "), filterRows)
+check("a name substring matches case insensitively", Model.filterStations(filterRows, "LOFI"), [filterRows[0]])
+check("an artist match keeps only that row", Model.filterStations(filterRows, "blue"), [filterRows[1]])
+check("no match yields nothing", Model.filterStations(filterRows, "house"), [])
+check("a padded query still matches", Model.filterStations(filterRows, "  lofi "), [filterRows[0]])
+check("a missing list is not an error", Model.filterStations(null, "x"), [])
+check("no query on a missing list is empty", Model.filterStations(null, ""), [])
 
 // The provider op (CONTRACT section 5), through the daemon's remote passthrough, so
 // the list is looked for inside an envelope as well as at the top.

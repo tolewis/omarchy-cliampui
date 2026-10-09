@@ -3,10 +3,13 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import qs.Commons
 import qs.Ui
+import "Model.js" as Model
 
-// Radio stations as the daemon reports them, listed above the library. Hidden while
-// the list is empty, which is also the answer a daemon without the stations op
-// gives, so the panel is unchanged on an unpatched cliamp. Rows are reached with the
+// Radio stations as the daemon reports them, listed above the library. The section
+// hides while the daemon has not answered a stations read, which is also the answer
+// a daemon without the stations op gives, so the panel is unchanged on an unpatched
+// cliamp. The one exception is an answered-but-empty registry, which says where the
+// rows come from instead of leaving a hole in the panel. Rows are reached with the
 // pointer; the keyboard cursor stays on the library and the output sheet.
 Column {
   id: root
@@ -14,11 +17,26 @@ Column {
   property var service: null
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
+  property string filterText: ""
 
   readonly property color dim: Qt.darker(foreground, 1.4)
   readonly property var stations: service ? service.stations : []
+  readonly property var filtered: Model.filterStations(stations, filterText)
 
-  visible: root.stations.length > 0
+  // An answered-but-empty registry is the only case that opens the section with no
+  // rows. stationsLoaded would be the right flag; until it exists, the service
+  // running is the closest honest stand-in.
+  readonly property bool stationsAnswered: service
+    ? (service.stationsLoaded !== undefined ? service.stationsLoaded : service.running)
+    : false
+
+  // The row the daemon is actually playing, looked up in the unfiltered list so the
+  // active match is the same whether or not the filter is hiding rows.
+  readonly property var activeStation: (service && service.activeStationIndex >= 0
+      && service.activeStationIndex < stations.length)
+    ? stations[service.activeStationIndex] : null
+
+  visible: root.stations.length > 0 || root.stationsAnswered
   spacing: Style.space(8)
 
   PanelSeparator {
@@ -27,9 +45,48 @@ Column {
   }
 
   PanelSectionHeader {
-    text: "STATIONS"
+    // The count is the filtered count, which is the full count while the filter is
+    // empty, so one binding covers both.
+    text: "STATIONS (" + root.filtered.length + ")"
     foreground: root.foreground
     fontFamily: root.fontFamily
+  }
+
+  // The station being played, named the way the hero names a track, so the active
+  // row stays findable while the list scrolls.
+  Text {
+    id: nowPlayingLine
+    width: parent.width
+    textFormat: Text.PlainText
+    text: root.activeStation
+      ? root.service.title + " — " + String(root.activeStation.name || root.activeStation.id || "")
+      : ""
+    visible: text.length > 0
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+
+  // The filter runs client-side on name and artist, so it answers on a daemon that
+  // cannot search. The field keeps the library's focus idiom, and a registry with
+  // no rows has nothing to filter.
+  TextField {
+    id: filterField
+    width: parent.width
+    placeholderText: "Filter stations"
+    foreground: root.foreground
+    font.family: root.fontFamily
+    visible: root.stations.length > 0
+
+    Keys.onEscapePressed: filterField.clear()
+    onTextChanged: filterDebounce.restart()
+  }
+
+  Timer {
+    id: filterDebounce
+    interval: 260
+    repeat: false
+    onTriggered: root.filterText = filterField.text
   }
 
   // Stations are few, but a long name must never hide the rest of the panel, so the
@@ -40,7 +97,7 @@ Column {
     height: Math.min(contentHeight, Style.space(160))
     clip: true
     spacing: Style.space(2)
-    model: root.stations
+    model: root.filtered
     keyNavigationEnabled: false
     boundsBehavior: Flickable.StopAtBounds
     interactive: contentHeight > height
@@ -55,7 +112,10 @@ Column {
       foreground: root.foreground
       implicitHeight: stationLabel.implicitHeight + Style.spacing.rowPaddingX
 
-      readonly property bool isActive: root.service && index === root.service.activeStationIndex
+      // Matched by id against the unfiltered list, because after a filter the
+      // delegate's index is a position in the filtered list, not in stations.
+      readonly property bool isActive: root.activeStation !== null
+        && String(modelData.id || "") === String(root.activeStation.id || "")
 
       MouseArea {
         anchors.fill: parent
@@ -80,6 +140,7 @@ Column {
           color: stationRow.isActive ? root.foreground : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
+          font.bold: stationRow.isActive
           elide: Text.ElideRight
         }
 
@@ -102,5 +163,18 @@ Column {
         }
       }
     }
+  }
+
+  // One answered-but-empty registry: say where the rows come from instead of
+  // leaving the section a blank hole.
+  Text {
+    width: parent.width
+    textFormat: Text.PlainText
+    text: "Play something once and stations appear here."
+    horizontalAlignment: Text.AlignHCenter
+    visible: root.stations.length === 0
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
   }
 }

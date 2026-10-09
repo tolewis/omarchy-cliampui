@@ -451,6 +451,23 @@ function stationActiveIndex(stations, path) {
   return -1
 }
 
+// The station filter runs in the panel, client-side, so a daemon without any
+// search op still answers it. The query is a case-insensitive substring of the
+// station's name or artist; an empty query keeps every row.
+function filterStations(stations, query) {
+  var list = stations && stations.length !== undefined ? stations : []
+  var wanted = String(query || "").trim().toLowerCase()
+  if (wanted.length === 0) return list
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i]
+    if (!s || typeof s !== "object") continue
+    var hay = (String(s.name || "") + " " + String(s.artist || "")).toLowerCase()
+    if (hay.indexOf(wanted) !== -1) out.push(s)
+  }
+  return out
+}
+
 // Sample input, the result of `cliamp remote call provider.list`:
 // {"providers":[{"key":"navidrome","name":"Navidrome","authed":true},
 //  {"key":"radio","name":"Radio","authed":true,"active":true}]}

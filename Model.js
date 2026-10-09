@@ -666,3 +666,83 @@ function elideError(raw) {
   if (text.length <= MAX_ERROR_CHARS) return text
   return text.slice(0, MAX_ERROR_CHARS)
 }
+
+// ---- provider search (fork) ----
+
+// The v2 provider.search answer, dug out of the --wait job envelope the same
+// way the provider list is. Only rows that carry a playable path are kept:
+// the panel plays them with track.play, no second lookup.
+function parseProviderSearch(raw, providerKey) {
+  var out = []
+  var data = jobPayload(raw)
+  if (!data) return out
+  var tracks = null
+  if (data.tracks && data.tracks.length !== undefined) tracks = data.tracks
+  if (!tracks && data.result && data.result.tracks && data.result.tracks.length !== undefined) tracks = data.result.tracks
+  if (!tracks || tracks.length === undefined) return out
+  for (var i = 0; i < tracks.length; i++) {
+    var t = tracks[i]
+    if (!t || typeof t !== "object") continue
+    var path = String(t.path || "")
+    var id = String(t.id || "")
+    if (path.length === 0 && id.length === 0) continue
+    var prov = String(t.provider || providerKey || "spotify")
+    if (path.length === 0 && id.length > 0 && prov === "spotify") path = "spotify:track:" + id
+    if (path.length === 0) continue
+    out.push({
+      kind: "song",
+      id: id,
+      uri: path,
+      name: String(t.title || t.name || ""),
+      artist: String(t.artist || ""),
+      album: String(t.album || ""),
+      duration: numberOr(t.duration, 0)
+    })
+  }
+  return out
+}
+
+function jobPayload(raw) {
+  var text = String(raw || "").trim()
+  if (text.length === 0) return null
+  var data = null
+  try { data = JSON.parse(text) } catch (e) { return null }
+  if (!data || typeof data !== "object") return null
+  if (data.job && data.job.result) {
+    var inner = data.job.result
+    if (typeof inner === "string") {
+      try { inner = JSON.parse(inner) } catch (e2) { inner = null }
+    }
+    if (inner && typeof inner === "object") return inner
+  }
+  if (data.result && typeof data.result === "object") {
+    var res = data.result
+    if (typeof res === "string") {
+      try { res = JSON.parse(res) } catch (e3) { return data }
+    }
+    if (res && typeof res === "object") {
+      if (res.tracks && res.tracks.length !== undefined) return res
+      var fromJob = data.job && data.job.result
+      if (fromJob && typeof fromJob === "object") return fromJob
+    }
+  }
+  return data
+}
+
+function providerSearchArgs(key, query) {
+  var payload = {
+    provider: String(key || ""),
+    query: String(query || ""),
+    limit: 30
+  }
+  return ["remote", "call", "--wait", "provider.search", "--params", JSON.stringify(payload)]
+}
+
+function trackPlayArgs(row) {
+  var track = {
+    path: String(row && row.uri || ""),
+    title: String(row && row.name || ""),
+    artist: String(row && row.artist || "")
+  }
+  return ["remote", "call", "--wait", "track.play", "--params", JSON.stringify({track: track})]
+}

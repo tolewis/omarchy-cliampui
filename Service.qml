@@ -668,6 +668,14 @@ Item {
   // The provider the daemon resolves library tracks through, from provider.list. A
   // daemon without providers answers nothing, so the footer line hides itself.
   property var providers: []
+  property var _providerRows: []
+  readonly property string activeProviderKey: {
+    var list = providers && providers.length !== undefined ? providers : []
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].active === true) return String(list[i].key || "")
+    }
+    return ""
+  }
   readonly property string providerSummary: Model.providerSummary(providers)
 
   // Server rows on their own. Saved playlists are matched locally and merged in front,
@@ -678,6 +686,7 @@ Item {
 
   function _recomputeResults() {
     results = Model.matchPlaylists(playlists, libraryQuery).concat(_libraryRows)
+    if (_providerRows.length > 0) results = results.concat(_providerRows)
   }
 
   // The query this helper run was dispatched for, so a keystroke that arrives while
@@ -703,6 +712,23 @@ Item {
       ? [libraryHelper, "search", libraryQuery]
       : [libraryHelper, "albums", "200"]
     albumProcess.running = true
+    _dispatchProviderSearch()
+  }
+
+  // The subsonic helper answers nothing on a machine without Subsonic, which is
+  // every radio-and-spotify setup. The active provider's own search runs next to
+  // it and its rows merge into the same list; on an unpatched daemon the verb is
+  // unknown and the empty result hides itself.
+  function _dispatchProviderSearch() {
+    if (providerSearchProcess.running) return
+    var key = activeProviderKey
+    if (libraryQuery.length === 0 || key.length === 0) {
+      _providerRows = []
+      _recomputeResults()
+      return
+    }
+    providerSearchProcess.command = [cliampPath].concat(Model.providerSearchArgs(key, libraryQuery))
+    providerSearchProcess.running = true
   }
 
   function playResult(item) {
@@ -712,6 +738,12 @@ Item {
       // track instead of replacing the queue with the list.
       if (String(item.name) === Model.RECENTLY_PLAYED) { historyPlay(); return }
       loadPlaylist(String(item.name))
+      return
+    }
+    if (item.uri && item.uri.length > 0) {
+      if (trackPlayProcess.running) return
+      trackPlayProcess.command = [cliampPath].concat(Model.trackPlayArgs(item))
+      trackPlayProcess.running = true
       return
     }
     if (albumPlayProcess.running || !item.id) return
@@ -735,6 +767,24 @@ Item {
 
   Process {
     id: albumPlayProcess
+    command: []
+    onExited: settleTimer.restart()
+  }
+
+  Process {
+    id: providerSearchProcess
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root._providerRows = Model.parseProviderSearch(text, root.activeProviderKey)
+        root._recomputeResults()
+      }
+    }
+  }
+
+  Process {
+    id: trackPlayProcess
     command: []
     onExited: settleTimer.restart()
   }
@@ -978,6 +1028,13 @@ Item {
     if (!target || !target.key) return
     pendingProviderKey = target.key
     providerSwitchProcess.command = [cliampPath].concat(Model.providerSwitchArgs(target.key))
+    providerSwitchProcess.running = true
+  }
+
+  function switchProvider(key) {
+    if (providerSwitchProcess.running) return
+    if (!key || key.length === 0) return
+    providerSwitchProcess.command = [cliampPath].concat(Model.providerSwitchArgs(String(key)))
     providerSwitchProcess.running = true
   }
 

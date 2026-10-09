@@ -41,7 +41,9 @@ Column {
     TransportButton {
       shape: root.service && root.service.showPlaying ? "pause" : "play"
       size: Style.space(34)
-      enabled: root.live
+      // Do not disable this when the status object is stale. The daemon can
+      // be playing while running is false, and a disabled button swallows the click.
+      enabled: true
       filled: true
       fillColor: Color.accent
       // The glyph sits on the accent disc, so it takes the background colour to read.

@@ -1078,7 +1078,10 @@ Item {
     command: []
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.providers = Model.parseProviders(text)
+      onStreamFinished: {
+        root.providers = Model.parseProviders(text)
+        root.refreshCatalog()
+      }
     }
   }
 

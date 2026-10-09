@@ -381,7 +381,14 @@ check("station list args", Model.stationListArgs(), ["station", "list"])
 check("station play args", Model.stationPlayArgs("radio:lofi"), ["station", "play", "radio:lofi"])
 check("history play args", Model.historyPlayArgs(), ["remote", "call", "history.play", "--params", "{\"index\":0}"])
 check("provider list args", Model.providerListArgs(), ["remote", "call", "provider.list"])
-check("provider switch args", Model.providerSwitchArgs(), ["remote", "call", "provider.switch"])
+check("provider switch args", Model.providerSwitchArgs("navidrome"), ["remote", "call", "provider.switch", "--params", "{\"key\":\"navidrome\"}"])
+check("provider switch args empty", Model.providerSwitchArgs(), ["remote", "call", "provider.switch", "--params", "{}"])
+
+// The v2 envelope nests the payload under result; the statuses key is the
+// fork's richer row shape.
+const env = JSON.stringify({version: 2, ok: true, result: {ok: true, provider_statuses: [{key: "a", authed: true, active: true}]}})
+check("provider statuses nested", Model.parseProviders(env).length, 1)
+check("provider statuses nested fields", Model.parseProviders(env)[0].key + "/" + Model.parseProviders(env)[0].active, "a/true")
 
 check("the scratch playlist is not the recently played list",
   Model.RECENTLY_PLAYED !== "cliampui" && Model.RECENTLY_PLAYED === "Recently Played", true)

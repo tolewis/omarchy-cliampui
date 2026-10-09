@@ -959,11 +959,25 @@ Item {
     }
   }
 
-  // The switch is a click-through on the footer line. Re-read after, because the
+  // The switch is a click-through on the footer line. The click activates the
+  // next configured provider after the active one, then re-reads, because the
   // authorisation state on that line is what the operator is looking at.
+  property string pendingProviderKey: ""
   function cycleProvider() {
     if (providerSwitchProcess.running) return
-    providerSwitchProcess.command = [cliampPath].concat(Model.providerSwitchArgs())
+    var list = providers && providers.length !== undefined ? providers : []
+    if (list.length === 0) {
+      readProviders()
+      return
+    }
+    var start = 0
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].active === true) { start = i + 1; break }
+    }
+    var target = list[start % list.length]
+    if (!target || !target.key) return
+    pendingProviderKey = target.key
+    providerSwitchProcess.command = [cliampPath].concat(Model.providerSwitchArgs(target.key))
     providerSwitchProcess.running = true
   }
 

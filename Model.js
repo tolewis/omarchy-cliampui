@@ -486,12 +486,14 @@ function parseProviders(raw) {
 
 function providerList(data) {
   if (!data || typeof data !== "object") return null
+  if (data.provider_statuses && data.provider_statuses.length !== undefined) return data.provider_statuses
   if (data.providers && data.providers.length !== undefined) return data.providers
   if (data.length !== undefined) return data
-  var nestedKeys = ["result", "data", "value"]
+  var nestedKeys = ["result", "data", "value", "provider_statuses"]
   for (var i = 0; i < nestedKeys.length; i++) {
     var nested = data[nestedKeys[i]]
     if (nested && typeof nested === "object") {
+      if (nested.provider_statuses && nested.provider_statuses.length !== undefined) return nested.provider_statuses
       if (nested.providers && nested.providers.length !== undefined) return nested.providers
       if (nested.length !== undefined) return nested
     }
@@ -535,8 +537,9 @@ function providerListArgs() {
   return ["remote", "call", "provider.list"]
 }
 
-function providerSwitchArgs() {
-  return ["remote", "call", "provider.switch"]
+function providerSwitchArgs(key) {
+  var payload = typeof key === "string" && key.length > 0 ? {key: key} : {}
+  return ["remote", "call", "provider.switch", "--params", JSON.stringify(payload)]
 }
 
 function trim(text) {

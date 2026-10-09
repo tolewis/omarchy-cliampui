@@ -3,7 +3,7 @@
 
 const source = Deno.readTextFileSync(new URL("../Model.js", import.meta.url))
 const Model = new Function(
-  source + "; return { defaultStatus, parseStatus, rateFromNodeProps, sinkRateFromPactl, parseSinkAvailability, parsePlaylists, parseResults, matchPlaylists, messageKind, ackError, asBool, parseLyrics, activeLyricIndex, latencyMs, isSupportedOutputRate, parseBands, coverArtUrlFromStreamPath, transcodedFromPath, bluetoothCodecLabel, verdict, formatTime, elideError, MAX_ERROR_CHARS }"
+  source + "; return { defaultStatus, parseStatus, rateFromNodeProps, sinkRateFromPactl, parseSinkAvailability, parsePlaylists, parseResults, matchPlaylists, messageKind, ackError, asBool, parseLyrics, activeLyricIndex, latencyMs, isSupportedOutputRate, parseBands, coverArtUrlFromStreamPath, transcodedFromPath, bluetoothCodecLabel, verdict, formatTime, elideError, MAX_ERROR_CHARS, RECENTLY_PLAYED, parseStations, stationActiveIndex, parseProviders, providerSummary, stationListArgs, stationPlayArgs, historyPlayArgs, providerListArgs, providerSwitchArgs }"
 )()
 
 let failures = 0
@@ -324,6 +324,74 @@ check("non-numeric is zero", Model.formatTime("x"), "0:00")
 check("error whitespace collapses", Model.elideError("a\n\n  b"), "a b")
 check("long error is cut", Model.elideError("x".repeat(300)).length, Model.MAX_ERROR_CHARS)
 check("empty error stays empty", Model.elideError(""), "")
+
+// The station list op (CONTRACT section 1). A row without an id or a url cannot be
+// played back, so it is dropped, and everything unparseable yields the empty list
+// that hides the section in the panel.
+const stationsOk = '{"stations":[{"id":"radio:lofi","name":"Lofi","url":"https://radio.example/lofi","provider":"radio"},{"id":"radio:jazz","name":"Jazz","url":"https://radio.example/jazz","provider":"radio"}]}'
+
+check("stations parse", Model.parseStations(stationsOk), [
+  { id: "radio:lofi", name: "Lofi", url: "https://radio.example/lofi", provider: "radio" },
+  { id: "radio:jazz", name: "Jazz", url: "https://radio.example/jazz", provider: "radio" }
+])
+check("a bare station array parses", Model.parseStations('[{"id":"r:1","url":"https://x.example"}]')[0].id, "r:1")
+check("a row without a url is dropped", Model.parseStations('{"stations":[{"id":"r:1","name":"no url"}]}'), [])
+check("a row without an id is dropped", Model.parseStations('{"stations":[{"url":"https://x.example"}]}'), [])
+check("a row without a name keeps its id", Model.parseStations('{"stations":[{"id":"r:1","url":"https://x.example"}]}')[0],
+  { id: "r:1", name: "", url: "https://x.example", provider: "" })
+check("an empty station list is empty", Model.parseStations('{"stations":[]}'), [])
+check("an unknown verb line yields nothing", Model.parseStations("Command not found: station"), [])
+check("garbage stations yield nothing", Model.parseStations("nope"), [])
+check("no station input yields nothing", Model.parseStations(""), [])
+check("null station input yields nothing", Model.parseStations(null), [])
+
+check("the playing station is found by its stream url",
+  Model.stationActiveIndex(Model.parseStations(stationsOk), "https://radio.example/jazz"), 1)
+check("an unknown path has no active station",
+  Model.stationActiveIndex(Model.parseStations(stationsOk), "https://other.example/stream"), -1)
+check("no path means nothing is active", Model.stationActiveIndex(Model.parseStations(stationsOk), ""), -1)
+check("no stations means no active station", Model.stationActiveIndex([], "https://x.example"), -1)
+
+// The provider op (CONTRACT section 5), through the daemon's remote passthrough, so
+// the list is looked for inside an envelope as well as at the top.
+const providersOk = '{"providers":[{"key":"navidrome","name":"Navidrome","authed":true},{"key":"radio","name":"Radio","authed":true,"active":true}]}'
+
+check("providers parse", Model.parseProviders(providersOk), [
+  { key: "navidrome", name: "Navidrome", authed: true, active: false },
+  { key: "radio", name: "Radio", authed: true, active: true }
+])
+check("a bare provider array parses", Model.parseProviders('[{"key":"radio","authed":true}]')[0].key, "radio")
+check("an enveloped provider list parses", Model.parseProviders('{"ok":true,"result":{"providers":[{"key":"radio","authed":true}]}}')[0].key, "radio")
+check("an unknown auth flag is read as unauthed", Model.parseProviders('[{"key":"radio","authenticated":true}]')[0].authed, true)
+check("a row without a key is dropped", Model.parseProviders('{"providers":[{"name":"no key"}]}'), [])
+check("an empty provider list is empty", Model.parseProviders('{"providers":[]}'), [])
+check("garbage providers yield nothing", Model.parseProviders("nope"), [])
+check("no provider input yields nothing", Model.parseProviders(""), [])
+
+check("the footer line names the state",
+  Model.providerSummary([{ key: "navidrome", authed: true, active: false }, { key: "radio", authed: false, active: true }]),
+  "navidrome: authed · radio: active")
+check("authed and active are joined", Model.providerSummary([{ key: "a", authed: true, active: true }]), "a: authed · active")
+check("a key with no state says only the key", Model.providerSummary([{ key: "a", authed: false, active: false }]), "a")
+check("an empty provider list says nothing", Model.providerSummary([]), "")
+check("no providers say nothing", Model.providerSummary(null), "")
+
+// The CLI argument forms the panel builds, so a rename here breaks the panel too.
+check("station list args", Model.stationListArgs(), ["station", "list"])
+check("station play args", Model.stationPlayArgs("radio:lofi"), ["station", "play", "radio:lofi"])
+check("history play args", Model.historyPlayArgs(), ["remote", "call", "history.play", "--params", "{\"index\":0}"])
+check("provider list args", Model.providerListArgs(), ["remote", "call", "provider.list"])
+check("provider switch args", Model.providerSwitchArgs("navidrome"), ["remote", "call", "provider.switch", "--params", "{\"key\":\"navidrome\"}"])
+check("provider switch args empty", Model.providerSwitchArgs(), ["remote", "call", "provider.switch", "--params", "{}"])
+
+// The v2 envelope nests the payload under result; the statuses key is the
+// fork's richer row shape.
+const env = JSON.stringify({version: 2, ok: true, result: {ok: true, provider_statuses: [{key: "a", authed: true, active: true}]}})
+check("provider statuses nested", Model.parseProviders(env).length, 1)
+check("provider statuses nested fields", Model.parseProviders(env)[0].key + "/" + Model.parseProviders(env)[0].active, "a/true")
+
+check("the scratch playlist is not the recently played list",
+  Model.RECENTLY_PLAYED !== "cliampui" && Model.RECENTLY_PLAYED === "Recently Played", true)
 
 console.log(failures === 0 ? "all model tests passed" : failures + " failing")
 if (failures > 0) Deno.exit(1)

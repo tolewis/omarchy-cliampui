@@ -397,6 +397,151 @@ function matchPlaylists(playlists, query) {
   return out
 }
 
+// ---- radio stations and providers ----
+
+// A playlist cliamp rebuilds itself, not one the user saved. Its first entry is the
+// most recently played track, so the row in the panel replays that track instead of
+// loading the list as a queue.
+var RECENTLY_PLAYED = "Recently Played"
+
+// Sample input, the result of `cliamp station list`:
+// {"stations":[{"id":"radio:lofi","name":"Lofi","url":"https://radio.example/lofi","provider":"radio"}]}
+// A row without an id or a url cannot be played back, so it is dropped. Anything that
+// is not this shape (an error line, an ok wrapper) still parses when it can, and
+// garbage yields an empty list, which is what hides the section in the panel.
+function parseStations(raw) {
+  var out = []
+  var text = String(raw || "").trim()
+  if (text.length === 0) return out
+  var data = null
+  try {
+    data = JSON.parse(text)
+  } catch (e) {
+    return out
+  }
+  var list = null
+  if (data && typeof data === "object" && data.stations && data.stations.length !== undefined) list = data.stations
+  else if (data && typeof data === "object" && data.length !== undefined) list = data
+  if (!list || list.length === undefined) return out
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i]
+    if (!s || typeof s !== "object") continue
+    var id = String(s.id || "")
+    var url = String(s.url || "")
+    if (id.length === 0 || url.length === 0) continue
+    out.push({
+      id: id,
+      name: String(s.name || ""),
+      url: url,
+      provider: String(s.provider || "")
+    })
+  }
+  return out
+}
+
+// The row the daemon is actually playing. status.track.path is the stream url of a
+// station and station.list is in queue order, so an exact url match finds the row.
+function stationActiveIndex(stations, path) {
+  var wanted = String(path || "")
+  if (wanted.length === 0) return -1
+  var list = stations && stations.length !== undefined ? stations : []
+  for (var i = 0; i < list.length; i++) {
+    if (String(list[i] && list[i].url || "") === wanted) return i
+  }
+  return -1
+}
+
+// Sample input, the result of `cliamp remote call provider.list`:
+// {"providers":[{"key":"navidrome","name":"Navidrome","authed":true},
+//  {"key":"radio","name":"Radio","authed":true,"active":true}]}
+// The call travels through the daemon's remote passthrough, so the list is looked for
+// inside an envelope as well as at the top. A row without a key cannot be switched,
+// so it is dropped, and nothing parseable hides the footer line in the panel.
+function parseProviders(raw) {
+  var out = []
+  var text = String(raw || "").trim()
+  if (text.length === 0) return out
+  var data = null
+  try {
+    data = JSON.parse(text)
+  } catch (e) {
+    return out
+  }
+  var list = providerList(data)
+  if (!list || list.length === undefined) return out
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i]
+    if (!p || typeof p !== "object") continue
+    var key = String(p.key || p.id || "")
+    if (key.length === 0) continue
+    out.push({
+      key: key,
+      name: String(p.name || ""),
+      authed: p.authed === true || p.authenticated === true,
+      active: p.active === true || p.current === true || p.is_active === true
+    })
+  }
+  return out
+}
+
+function providerList(data) {
+  if (!data || typeof data !== "object") return null
+  if (data.provider_statuses && data.provider_statuses.length !== undefined) return data.provider_statuses
+  if (data.providers && data.providers.length !== undefined) return data.providers
+  if (data.length !== undefined) return data
+  var nestedKeys = ["result", "data", "value", "provider_statuses"]
+  for (var i = 0; i < nestedKeys.length; i++) {
+    var nested = data[nestedKeys[i]]
+    if (nested && typeof nested === "object") {
+      if (nested.provider_statuses && nested.provider_statuses.length !== undefined) return nested.provider_statuses
+      if (nested.providers && nested.providers.length !== undefined) return nested.providers
+      if (nested.length !== undefined) return nested
+    }
+  }
+  return null
+}
+
+// One footer line: "navidrome: authed · radio: active". An empty string hides the
+// line in the panel, which is also the answer a daemon without providers gives.
+function providerSummary(providers) {
+  var list = providers && providers.length !== undefined ? providers : []
+  var parts = []
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i]
+    if (!p) continue
+    var key = String(p.key || "")
+    if (key.length === 0) continue
+    var state = p.authed === true ? "authed" : ""
+    if (p.active === true) state = state.length > 0 ? state + " · active" : "active"
+    parts.push(state.length > 0 ? key + ": " + state : key)
+  }
+  return parts.join(" · ")
+}
+
+// The CLI argument forms for the ops the daemon adds. The station verbs are wired as
+// subcommands, the way history and load are. The parameterised ops travel through the
+// remote passthrough, which sends them to the running daemon over its own socket.
+function stationListArgs() {
+  return ["station", "list"]
+}
+
+function stationPlayArgs(id) {
+  return ["station", "play", String(id)]
+}
+
+function historyPlayArgs() {
+  return ["remote", "call", "history.play", "--params", "{\"index\":0}"]
+}
+
+function providerListArgs() {
+  return ["remote", "call", "provider.list"]
+}
+
+function providerSwitchArgs(key) {
+  var payload = typeof key === "string" && key.length > 0 ? {key: key} : {}
+  return ["remote", "call", "provider.switch", "--params", JSON.stringify(payload)]
+}
+
 function trim(text) {
   return String(text || "").replace(/^\s+/, "").replace(/\s+$/, "")
 }

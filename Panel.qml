@@ -115,12 +115,10 @@ Panel {
         }
       }
     }
-    // Right press opens the transport menu instead of toggling playback, the way the
-    // stock media widget's bar entry opens its popup; left press keeps toggling the
-    // panel.
+    // Both buttons open the panel. Quit and restart live in the panel footer.
+    // A separate popup failed to load (Popup.dim is final) and took the widget down.
     onPressed: function (buttonCode) {
-      if (buttonCode === Qt.RightButton) menu.toggle()
-      else root.toggle()
+      root.toggle()
     }
   }
 
@@ -231,15 +229,6 @@ Panel {
         }
       }
     }
-  }
-
-  // The right-press menu on the bar entry. Left press keeps toggling the panel.
-  PlayerMenu {
-    id: menu
-    anchorItem: button
-    service: cliamp
-    foreground: root.foreground
-    fontFamily: root.fontFamily
   }
 
   onOpenedChanged: {

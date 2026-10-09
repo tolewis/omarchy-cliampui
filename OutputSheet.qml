@@ -237,6 +237,46 @@ Column {
   // One chip per provider: the name, underlined while active. A click switches
   // to that provider directly, no cycling past the ones in between. Hidden
   // entirely when the daemon reports no providers.
+  Row {
+    spacing: Style.space(14)
+    Text {
+      text: "Stop"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.underline: true
+      MouseArea {
+        anchors.fill: parent
+        cursorShape: Qt.PointingHandCursor
+        onClicked: if (root.service) root.service.stop()
+      }
+    }
+    Text {
+      text: "Restart"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.underline: true
+      MouseArea {
+        anchors.fill: parent
+        cursorShape: Qt.PointingHandCursor
+        onClicked: if (root.service) root.service.restartDaemon()
+      }
+    }
+    Text {
+      text: "Quit"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.underline: true
+      MouseArea {
+        anchors.fill: parent
+        cursorShape: Qt.PointingHandCursor
+        onClicked: if (root.service) root.service.quitDaemon()
+      }
+    }
+  }
+
   Flow {
     width: parent.width
     spacing: Style.space(10)

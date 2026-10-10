@@ -166,7 +166,7 @@ Column {
       model: root.results
       keyNavigationEnabled: false
       boundsBehavior: Flickable.StopAtBounds
-      interactive: contentHeight > height
+      interactive: false
       ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; interactive: false }
 
       // currentIndex is deliberately not bound to the panel's cursor. ListView writes

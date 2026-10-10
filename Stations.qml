@@ -123,8 +123,16 @@ Column {
     model: root.filtered
     keyNavigationEnabled: false
     boundsBehavior: Flickable.StopAtBounds
-    interactive: contentHeight > height
+    interactive: false
     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; interactive: false }
+    WheelHandler {
+      onWheel: function (event) {
+        var next = stationList.contentY - event.angleDelta.y / 4
+        var maxY = Math.max(0, stationList.contentHeight - stationList.height)
+        stationList.contentY = Math.max(0, Math.min(maxY, next))
+        event.accepted = true
+      }
+    }
 
     delegate: CursorSurface {
       id: stationRow
@@ -141,6 +149,7 @@ Column {
         && String(modelData.id || "") === String(root.activeStation.id || "")
 
       MouseArea {
+        z: 2
         anchors.fill: parent
         hoverEnabled: true
         preventStealing: true

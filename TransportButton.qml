@@ -106,6 +106,7 @@ Item {
 
   MouseArea {
     id: mouse
+    z: 2
     anchors.fill: parent
     hoverEnabled: true
     preventStealing: true

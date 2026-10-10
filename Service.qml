@@ -667,6 +667,7 @@ Item {
     return ""
   }
   property var providerCatalog: []
+  property string catalogError: ""
   // Radio stays in the station list. Spotify and the other libraries replace
   // that list with their own playlists.
   readonly property bool catalogMode: activeProviderKey === "spotify"
@@ -678,8 +679,16 @@ Item {
   function refreshCatalog() {
     if (!catalogMode) { providerCatalog = []; return }
     if (catalogProcess.running) return
+    catalogError = ""
     catalogProcess.command = [cliampPath].concat(Model.providerPlaylistArgs(activeProviderKey))
     catalogProcess.running = true
+  }
+
+  Timer {
+    interval: 20000
+    repeat: true
+    running: catalogMode && providerCatalog.length === 0 && !catalogProcess.running
+    onTriggered: refreshCatalog()
   }
 
   function playCatalogItem(id) {
@@ -817,7 +826,17 @@ Item {
     command: []
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.providerCatalog = Model.parseProviderPlaylists(text)
+      onStreamFinished: {
+        var rows = Model.parseProviderPlaylists(text)
+        if (rows.length > 0) {
+          root.providerCatalog = rows
+          root.catalogError = ""
+        }
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (root.providerCatalog.length === 0) root.catalogError = Model.elideError(text)
     }
   }
 

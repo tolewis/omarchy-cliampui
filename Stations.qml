@@ -58,6 +58,23 @@ Column {
   // The station being played, named the way the hero names a track, so the active
   // row stays findable while the list scrolls.
   Text {
+    width: parent.width
+    wrapMode: Text.WordWrap
+    textFormat: Text.PlainText
+    visible: root.catalogMode && root.rows.length === 0
+    text: {
+      var err = root.service ? String(root.service.catalogError || "") : ""
+      if (err.indexOf("rate-limited") >= 0)
+        return "Spotify is rate-limited on the shared app. A personal client id fixes this. Retrying."
+      if (err.length > 0) return err
+      return "Loading playlists..."
+    }
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+
+  Text {
     id: nowPlayingLine
     width: parent.width
     textFormat: Text.PlainText

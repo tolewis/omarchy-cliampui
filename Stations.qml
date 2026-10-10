@@ -117,22 +117,16 @@ Column {
   ListView {
     id: stationList
     width: parent.width
-    height: Math.min(contentHeight, Style.space(160))
-    clip: true
+    // Full height, so the panel scroller reaches every playlist and the
+    // footer. A nested scroller here ate the wheel and never moved.
+    height: contentHeight
+    clip: false
     spacing: Style.space(2)
     model: root.filtered
     keyNavigationEnabled: false
     boundsBehavior: Flickable.StopAtBounds
     interactive: false
-    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; interactive: false }
-    WheelHandler {
-      onWheel: function (event) {
-        var next = stationList.contentY - event.angleDelta.y / 4
-        var maxY = Math.max(0, stationList.contentHeight - stationList.height)
-        stationList.contentY = Math.max(0, Math.min(maxY, next))
-        event.accepted = true
-      }
-    }
+    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOff }
 
     delegate: CursorSurface {
       id: stationRow

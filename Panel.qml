@@ -171,16 +171,9 @@ Panel {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
-        // An interactive Flickable is a hit target over every button. The
-        // wheel still scrolls. Clicks go to the rows.
-        interactive: false
-        WheelHandler {
-          onWheel: function (event) {
-            var next = panelFlick.contentY - event.angleDelta.y / 4
-            var maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
-            panelFlick.contentY = Math.max(0, Math.min(maxY, next))
-          }
-        }
+        // The panel scrolls with the wheel and the trackpad. Row clicks set
+        // preventStealing so a click is not turned into a drag.
+        interactive: true
         // Indicator only: an interactive bar lays a hit strip over content the
         // keyboard already reaches, and the library list scrolls itself.
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; interactive: false }

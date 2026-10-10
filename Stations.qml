@@ -76,10 +76,10 @@ Column {
   TextField {
     id: filterField
     width: parent.width
-    placeholderText: root.catalogMode ? "Filter playlists" : "Filter stations"
+    placeholderText: root.catalogMode ? "Search Spotify" : "Filter stations"
     foreground: root.foreground
     font.family: root.fontFamily
-    visible: root.rows.length > 0
+    visible: root.rows.length > 0 || root.catalogMode
 
     Keys.onEscapePressed: filterField.clear()
     onTextChanged: filterDebounce.restart()

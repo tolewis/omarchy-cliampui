@@ -171,9 +171,9 @@ Panel {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
-        // The panel scrolls with the wheel and the trackpad. Row clicks set
-        // preventStealing so a click is not turned into a drag.
-        interactive: true
+        // Scroll the panel only when the column is taller than the window.
+        // A short page of rows keeps the footer on screen.
+        interactive: contentHeight > height
         // Indicator only: an interactive bar lays a hit strip over content the
         // keyboard already reaches, and the library list scrolls itself.
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; interactive: false }

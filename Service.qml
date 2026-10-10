@@ -667,7 +667,13 @@ Item {
     return ""
   }
   property var providerCatalog: []
+  property int playlistTotal: 0
+  property var favoriteRows: []
+  property int favoriteTotal: 0
+  property var historyRows: []
   property string catalogError: ""
+  property string browseTab: "playlists"
+  property bool browseBusy: false
   // Radio stays in the station list. Spotify and the other libraries replace
   // that list with their own playlists.
   readonly property bool catalogMode: activeProviderKey === "spotify"
@@ -677,11 +683,60 @@ Item {
   onActiveProviderKeyChanged: refreshCatalog()
 
   function refreshCatalog() {
-    if (!catalogMode) { providerCatalog = []; return }
+    browseTab = "playlists"
+    if (!catalogMode) { providerCatalog = []; playlistTotal = 0; return }
     if (catalogProcess.running) return
     catalogError = ""
-    catalogProcess.command = [cliampPath].concat(Model.providerPlaylistArgs(activeProviderKey))
+    browseBusy = true
+    playlistAppend = false
+    providerCatalog = []
+    catalogProcess.command = [cliampPath].concat(Model.providerPlaylistArgs(activeProviderKey, 8, 0))
     catalogProcess.running = true
+  }
+
+  function loadMorePlaylists() {
+    if (!catalogMode || catalogProcess.running) return
+    playlistAppend = true
+    catalogProcess.command = [cliampPath].concat(Model.providerPlaylistArgs(activeProviderKey, 8, providerCatalog.length))
+    catalogProcess.running = true
+  }
+
+  property bool favoriteAppend: false
+  property bool playlistAppend: false
+
+  function loadFavorites() {
+    browseTab = "favorites"
+    if (!catalogMode || favoriteProcess.running) return
+    catalogError = ""
+    browseBusy = true
+    favoriteAppend = false
+    favoriteRows = []
+    favoriteProcess.command = [cliampPath].concat(Model.providerTracksArgs(activeProviderKey, Model.favoritesPlaylistId(activeProviderKey), 8, 0))
+    favoriteProcess.running = true
+  }
+
+  function loadMoreFavorites() {
+    if (!catalogMode || favoriteProcess.running) return
+    favoriteAppend = true
+    favoriteProcess.command = [cliampPath].concat(Model.providerTracksArgs(activeProviderKey, Model.favoritesPlaylistId(activeProviderKey), 8, favoriteRows.length))
+    favoriteProcess.running = true
+  }
+
+  function loadHistory() {
+    browseTab = "history"
+    if (historyProcess.running) return
+    catalogError = ""
+    browseBusy = true
+    historyRows = []
+    historyProcess.command = [cliampPath].concat(Model.historyListArgs(8))
+    historyProcess.running = true
+  }
+
+  function playHistory(path) {
+    if (!path) return
+    if (historyPlayProcess.running) historyPlayProcess.running = false
+    historyPlayProcess.command = [cliampPath].concat(Model.historyPlayPathArgs(path))
+    historyPlayProcess.running = true
   }
 
   Timer {
@@ -705,6 +760,9 @@ Item {
     var q = String(query || "")
     if (q.length === 0) { refreshCatalog(); return }
     if (catalogSearchProcess.running) return
+    browseBusy = true
+    browseTab = "search"
+    providerCatalog = []
     catalogSearchProcess.command = [cliampPath].concat(Model.providerSearchArgs(activeProviderKey, q))
     catalogSearchProcess.running = true
   }
@@ -829,10 +887,13 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         var rows = Model.parseProviderPlaylists(text)
+        root.playlistTotal = Model.pageTotal(text)
         if (rows.length > 0) {
-          root.providerCatalog = rows
+          root.providerCatalog = root.playlistAppend ? root.providerCatalog.concat(rows) : rows
           root.catalogError = ""
         }
+        root.playlistAppend = false
+        root.browseBusy = false
       }
     }
     stderr: StdioCollector {
@@ -856,7 +917,48 @@ Item {
     command: []
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.providerCatalog = Model.parseProviderSearch(text, root.activeProviderKey)
+      onStreamFinished: {
+        root.browseTab = "search"
+        root.providerCatalog = Model.parseProviderSearch(text, root.activeProviderKey)
+        root.playlistTotal = Model.pageTotal(text)
+        root.browseBusy = false
+      }
+    }
+    onExited: root.browseBusy = false
+  }
+
+  Process {
+    id: favoriteProcess
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var rows = Model.parseProviderSearch(text, root.activeProviderKey)
+        root.favoriteTotal = Model.pageTotal(text)
+        root.favoriteRows = root.favoriteAppend ? root.favoriteRows.concat(rows) : rows
+        root.favoriteAppend = false
+        root.browseBusy = false
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (root.favoriteRows.length === 0) root.catalogError = Model.elideError(text)
+    }
+  }
+
+  Process {
+    id: historyProcess
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.historyRows = Model.parseHistory(text)
+        root.browseBusy = false
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (root.historyRows.length === 0) root.catalogError = Model.elideError(text)
     }
   }
 

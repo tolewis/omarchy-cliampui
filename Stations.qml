@@ -5,12 +5,8 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Radio stations as the daemon reports them, listed above the library. The section
-// hides while the daemon has not answered a stations read, which is also the answer
-// a daemon without the stations op gives, so the panel is unchanged on an unpatched
-// cliamp. The one exception is an answered-but-empty registry, which says where the
-// rows come from instead of leaving a hole in the panel. Rows are reached with the
-// pointer; the keyboard cursor stays on the library and the output sheet.
+// A short browser. The panel is about 500 px tall, so this section never grows
+// with the full library. Playlists, favorites, and history each load one page.
 Column {
   id: root
 
@@ -21,26 +17,30 @@ Column {
 
   readonly property color dim: Qt.darker(foreground, 1.4)
   readonly property bool catalogMode: !!(service && service.catalogMode)
+  readonly property string tab: service ? String(service.browseTab || "playlists") : "playlists"
   readonly property var stations: service ? service.stations : []
-  readonly property var catalog: service && service.providerCatalog ? service.providerCatalog : []
-  readonly property var rows: catalogMode ? catalog : stations
-  readonly property var filtered: Model.filterStations(rows, filterText)
+  readonly property var sourceRows: {
+    if (!catalogMode) return stations
+    if (tab === "favorites") return service.favoriteRows || []
+    if (tab === "history") return service.historyRows || []
+    return service.providerCatalog || []
+  }
+  readonly property var filtered: Model.filterStations(sourceRows, filterText)
+  readonly property int shownTotal: {
+    if (!service || !catalogMode) return filtered.length
+    if (tab === "favorites") return service.favoriteTotal || filtered.length
+    if (tab === "playlists" || tab === "search") return service.playlistTotal || filtered.length
+    return filtered.length
+  }
+  readonly property bool canMore: catalogMode && filtered.length > 0 && filtered.length < shownTotal
+    && (tab === "playlists" || tab === "favorites")
 
-  // An answered-but-empty registry is the only case that opens the section with no
-  // rows. stationsLoaded would be the right flag; until it exists, the service
-  // running is the closest honest stand-in.
   readonly property bool stationsAnswered: service
     ? (service.stationsLoaded !== undefined ? service.stationsLoaded : service.running)
     : false
 
-  // The row the daemon is actually playing, looked up in the unfiltered list so the
-  // active match is the same whether or not the filter is hiding rows.
-  readonly property var activeStation: (service && service.activeStationIndex >= 0
-      && service.activeStationIndex < stations.length)
-    ? stations[service.activeStationIndex] : null
-
-  visible: root.stations.length > 0 || root.stationsAnswered
-  spacing: Style.space(8)
+  visible: catalogMode || stations.length > 0 || stationsAnswered
+  spacing: Style.space(6)
 
   PanelSeparator {
     width: parent.width
@@ -48,99 +48,111 @@ Column {
   }
 
   PanelSectionHeader {
-    // The count is the filtered count, which is the full count while the filter is
-    // empty, so one binding covers both.
-    text: (root.catalogMode ? String(root.service.activeProviderKey).toUpperCase() : "STATIONS") + " (" + root.filtered.length + ")"
+    text: root.catalogMode
+      ? (root.tab === "search" ? "SEARCH" : root.tab.toUpperCase())
+      : "STATIONS"
     foreground: root.foreground
     fontFamily: root.fontFamily
   }
 
-  // The station being played, named the way the hero names a track, so the active
-  // row stays findable while the list scrolls.
+  Row {
+    width: parent.width
+    spacing: Style.space(12)
+    visible: root.catalogMode
+
+    Repeater {
+      model: [
+        { key: "playlists", label: "Playlists" },
+        { key: "favorites", label: "Favorites" },
+        { key: "history", label: "History" }
+      ]
+      delegate: Text {
+        required property var modelData
+        text: modelData.label
+        color: root.tab === modelData.key ? root.foreground : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.underline: root.tab === modelData.key
+        font.bold: root.tab === modelData.key
+
+        MouseArea {
+          anchors.fill: parent
+          preventStealing: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.openTab(modelData.key)
+        }
+      }
+    }
+  }
+
   Text {
     width: parent.width
     wrapMode: Text.WordWrap
     textFormat: Text.PlainText
-    visible: root.catalogMode && root.rows.length === 0
-    text: {
+    visible: root.catalogMode && root.filtered.length === 0 && String(statusText).length > 0
+    text: statusText
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+
+    readonly property string statusText: {
       var err = root.service ? String(root.service.catalogError || "") : ""
-      if (err.indexOf("rate-limited") >= 0)
-        return "Spotify is rate-limited on the shared app. A personal client id fixes this. Retrying."
       if (err.length > 0) return err
-      return "Loading playlists..."
+      if (root.sourceRows.length > 0) return "Nothing matched."
+      if (root.service && root.service.browseBusy) return "Loading..."
+      if (root.tab === "favorites") return "No favorites yet."
+      if (root.tab === "history") return "No history yet."
+      if (root.tab === "search") return "Nothing matched."
+      return ""
     }
-    color: root.dim
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
   }
 
-  Text {
-    id: nowPlayingLine
-    width: parent.width
-    textFormat: Text.PlainText
-    text: root.activeStation
-      ? root.service.title + " — " + String(root.activeStation.name || root.activeStation.id || "")
-      : ""
-    visible: text.length > 0
-    color: root.dim
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
-  }
-
-  // The filter runs client-side on name and artist, so it answers on a daemon that
-  // cannot search. The field keeps the library's focus idiom, and a registry with
-  // no rows has nothing to filter.
   TextField {
     id: filterField
     width: parent.width
-    placeholderText: root.catalogMode ? "Search Spotify" : "Filter stations"
+    placeholderText: root.catalogMode ? "Filter, or Enter to search" : "Filter stations"
     foreground: root.foreground
     font.family: root.fontFamily
-    visible: root.rows.length > 0 || root.catalogMode
+    visible: root.catalogMode || root.stations.length > 0
 
-    Keys.onEscapePressed: filterField.clear()
+    Keys.onEscapePressed: {
+      filterField.clear()
+      if (root.catalogMode && root.service) root.service.refreshCatalog()
+    }
+    Keys.onReturnPressed: root.submitSearch()
+    Keys.onEnterPressed: root.submitSearch()
     onTextChanged: filterDebounce.restart()
   }
 
   Timer {
     id: filterDebounce
-    interval: 260
+    interval: 180
     repeat: false
-    onTriggered: {
-      root.filterText = filterField.text
-      if (root.catalogMode && root.service) root.service.searchCatalog(filterField.text)
-    }
+    onTriggered: root.filterText = filterField.text
   }
 
-  // Stations are few, but a long name must never hide the rest of the panel, so the
-  // list scrolls inside its own bounds the way the library does.
+  // Five rows. The rest of the page stays inside this box, so the panel
+  // footer is not pushed off a 500 px window.
   ListView {
-    id: stationList
+    id: rowList
     width: parent.width
-    // Full height, so the panel scroller reaches every playlist and the
-    // footer. A nested scroller here ate the wheel and never moved.
-    height: contentHeight
-    clip: false
+    height: Math.min(contentHeight, Style.space(132))
+    clip: true
     spacing: Style.space(2)
     model: root.filtered
     keyNavigationEnabled: false
     boundsBehavior: Flickable.StopAtBounds
-    interactive: false
-    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOff }
+    interactive: contentHeight > height
+    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; interactive: false }
 
     delegate: CursorSurface {
-      id: stationRow
+      id: row
       required property var modelData
       required property int index
 
-      width: stationList.width
+      width: rowList.width
       foreground: root.foreground
-      implicitHeight: stationLabel.implicitHeight + Style.spacing.rowPaddingX
-
-      // Matched by id against the unfiltered list, because after a filter the
-      // delegate's index is a position in the filtered list, not in stations.
-      readonly property bool isActive: root.activeStation !== null
-        && String(modelData.id || "") === String(root.activeStation.id || "")
+      implicitHeight: label.implicitHeight + Style.spacing.rowPaddingX
 
       MouseArea {
         z: 2
@@ -148,66 +160,98 @@ Column {
         hoverEnabled: true
         preventStealing: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: {
-          if (!root.catalogMode) { root.service.playStation(String(modelData.id || "")); return }
-          var playId = String(modelData.id || "")
-          if (modelData.uri && String(modelData.uri).indexOf("spotify:album:") === 0)
-            playId = String(modelData.uri).substring("spotify:album:".length)
-          root.service.playCatalogItem(playId)
-        }
+        onClicked: root.activate(modelData)
       }
 
       RowLayout {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.leftMargin: Style.space(10)
-        anchors.rightMargin: Style.space(10)
-        spacing: Style.space(8)
+        anchors.fill: parent
+        anchors.leftMargin: Style.space(8)
+        anchors.rightMargin: Style.space(8)
 
         Text {
-          id: stationLabel
+          id: label
           textFormat: Text.PlainText
           Layout.fillWidth: true
-          text: String(modelData.name || modelData.id)
-          color: stationRow.isActive ? root.foreground : root.dim
+          text: String(modelData.name || modelData.id || "")
+          color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
-          font.bold: stationRow.isActive
           elide: Text.ElideRight
         }
 
         Text {
           textFormat: Text.PlainText
-          text: String(modelData.provider || "").toUpperCase()
+          text: String(modelData.artist || "")
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
-          font.letterSpacing: 1.2
-          visible: text.length > 0
-        }
-
-        Text {
-          textFormat: Text.PlainText
-          text: stationRow.isActive ? "✓" : ""
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
+          elide: Text.ElideRight
+          Layout.maximumWidth: Style.space(120)
+          visible: text.length > 0 && modelData.kind !== "playlist"
         }
       }
     }
   }
 
-  // One answered-but-empty registry: say where the rows come from instead of
-  // leaving the section a blank hole.
+  Text {
+    visible: root.canMore
+    text: "More"
+    color: root.foreground
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    font.underline: true
+
+    MouseArea {
+      anchors.fill: parent
+      preventStealing: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: {
+        if (!root.service) return
+        if (root.tab === "favorites") root.service.loadMoreFavorites()
+        else root.service.loadMorePlaylists()
+      }
+    }
+  }
+
   Text {
     width: parent.width
     textFormat: Text.PlainText
-    text: "Play something once and stations appear here."
-    horizontalAlignment: Text.AlignHCenter
-    visible: root.stations.length === 0
+    text: root.catalogMode
+      ? (root.shownTotal > root.filtered.length ? String(root.filtered.length) + " of " + root.shownTotal : "")
+      : ""
+    visible: text.length > 0
     color: root.dim
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption
+  }
+
+  function openTab(key) {
+    if (!service) return
+    filterText = ""
+    filterField.clear()
+    if (key === "favorites") service.loadFavorites()
+    else if (key === "history") service.loadHistory()
+    else service.refreshCatalog()
+  }
+
+  function submitSearch() {
+    if (!catalogMode || !service) return
+    var q = String(filterField.text || "")
+    if (q.length === 0) { service.refreshCatalog(); return }
+    service.searchCatalog(q)
+  }
+
+  function activate(item) {
+    if (!service || !item) return
+    if (!catalogMode) { service.playStation(String(item.id || "")); return }
+    if (tab === "history") { service.playHistory(String(item.uri || item.id || "")); return }
+    if (item.uri && String(item.uri).length > 0) {
+      service.playResult(item)
+      return
+    }
+    var playId = String(item.id || "")
+    if (item.uri && String(item.uri).indexOf("spotify:album:") === 0)
+      playId = String(item.uri).substring("spotify:album:".length)
+    service.playCatalogItem(playId)
   }
 }

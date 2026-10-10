@@ -766,9 +766,65 @@ function parseProviderPlaylists(raw) {
   return out
 }
 
-function providerPlaylistArgs(key) {
+function providerPlaylistArgs(key, limit, offset) {
   return ["remote", "call", "--wait", "provider.playlists", "--params",
-    JSON.stringify({provider: String(key || ""), limit: 50})]
+    JSON.stringify({
+      provider: String(key || ""),
+      limit: limit || 8,
+      offset: offset || 0
+    })]
+}
+
+function providerTracksArgs(key, playlistId, limit, offset) {
+  return ["remote", "call", "--wait", "provider.tracks", "--params",
+    JSON.stringify({
+      provider: String(key || ""),
+      playlist: String(playlistId || ""),
+      limit: limit || 8,
+      offset: offset || 0
+    })]
+}
+
+function historyListArgs(limit) {
+  return ["remote", "call", "--wait", "history", "--params",
+    JSON.stringify({limit: limit || 8})]
+}
+
+function historyPlayPathArgs(path) {
+  return ["remote", "call", "--wait", "history.play", "--params",
+    JSON.stringify({path: String(path || "")})]
+}
+
+function favoritesPlaylistId(providerKey) {
+  return String(providerKey || "") === "spotify" ? "YOUR MUSIC" : "Favorites"
+}
+
+function pageTotal(raw) {
+  var data = jobPayload(raw)
+  if (!data || data.total === undefined) return 0
+  return numberOr(data.total, 0)
+}
+
+function parseHistory(raw) {
+  var out = []
+  var data = jobPayload(raw)
+  var list = data && data.history
+  if (!list || list.length === undefined) return out
+  for (var i = 0; i < list.length; i++) {
+    var row = list[i] || {}
+    var t = row.track || row
+    var path = String(t.path || "")
+    if (path.length === 0) continue
+    out.push({
+      id: path,
+      uri: path,
+      name: String(t.title || t.name || path),
+      artist: String(t.artist || ""),
+      kind: "history",
+      index: i
+    })
+  }
+  return out
 }
 
 function providerLoadArgs(key, id) {
@@ -780,7 +836,7 @@ function providerSearchArgs(key, query) {
   var payload = {
     provider: String(key || ""),
     query: String(query || ""),
-    limit: 30
+    limit: 8
   }
   return ["remote", "call", "--wait", "provider.search", "--params", JSON.stringify(payload)]
 }

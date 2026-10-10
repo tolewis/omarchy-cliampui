@@ -3,7 +3,7 @@
 
 const source = Deno.readTextFileSync(new URL("../Model.js", import.meta.url))
 const Model = new Function(
-  source + "; return { defaultStatus, parseStatus, rateFromNodeProps, sinkRateFromPactl, parseSinkAvailability, parsePlaylists, parseResults, matchPlaylists, messageKind, ackError, asBool, parseLyrics, activeLyricIndex, latencyMs, isSupportedOutputRate, parseBands, coverArtUrlFromStreamPath, transcodedFromPath, bluetoothCodecLabel, verdict, formatTime, elideError, MAX_ERROR_CHARS, RECENTLY_PLAYED, parseStations, stationActiveIndex, parseProviders, providerSummary, stationListArgs, stationPlayArgs, historyPlayArgs, providerListArgs, providerSwitchArgs, parseProviderSearch, providerSearchArgs, trackPlayArgs, filterStations, parseProviderPlaylists }"
+  source + "; return { defaultStatus, parseStatus, rateFromNodeProps, sinkRateFromPactl, parseSinkAvailability, parsePlaylists, parseResults, matchPlaylists, messageKind, ackError, asBool, parseLyrics, activeLyricIndex, latencyMs, isSupportedOutputRate, parseBands, coverArtUrlFromStreamPath, transcodedFromPath, bluetoothCodecLabel, verdict, formatTime, elideError, MAX_ERROR_CHARS, RECENTLY_PLAYED, parseStations, stationActiveIndex, parseProviders, providerSummary, stationListArgs, stationPlayArgs, historyPlayArgs, providerListArgs, providerSwitchArgs, parseProviderSearch, providerSearchArgs, trackPlayArgs, filterStations, parseProviderPlaylists, parseHistory, pageTotal, favoritesPlaylistId }"
 )()
 
 let failures = 0
@@ -417,6 +417,9 @@ const srch = JSON.stringify({version: 2, ok: true, job: {state: "succeeded", res
 ]}}})
 const pls = JSON.stringify({ok:true, job:{result:{playlists:[{id:"abc", name:"Dance", track_count:18}]}}})
 check("provider playlists", Model.parseProviderPlaylists(pls)[0].name, "Dance")
+const hist = JSON.stringify({ok:true, job:{result:{history:[{track:{title:"Song", artist:"A", path:"spotify:track:1"}}]}}})
+check("history row", Model.parseHistory(hist)[0].name, "Song")
+check("favorites id", Model.favoritesPlaylistId("spotify"), "YOUR MUSIC")
 check("provider search rows", Model.parseProviderSearch(srch).length, 2)
 check("provider search uri fallback", Model.parseProviderSearch(srch)[1].uri, "spotify:track:def")
 const spArgs = Model.providerSearchArgs("spotify", "daft")

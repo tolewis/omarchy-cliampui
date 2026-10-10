@@ -124,7 +124,7 @@ Column {
     keyNavigationEnabled: false
     boundsBehavior: Flickable.StopAtBounds
     interactive: contentHeight > height
-    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; interactive: false }
 
     delegate: CursorSurface {
       id: stationRow
@@ -143,6 +143,7 @@ Column {
       MouseArea {
         anchors.fill: parent
         hoverEnabled: true
+        preventStealing: true
         cursorShape: Qt.PointingHandCursor
         onClicked: {
           if (!root.catalogMode) { root.service.playStation(String(modelData.id || "")); return }

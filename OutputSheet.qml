@@ -38,6 +38,7 @@ Column {
     implicitHeight: summaryLabel.implicitHeight + Style.spacing.rowPaddingX
 
     MouseArea {
+        preventStealing: true
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
@@ -95,6 +96,7 @@ Column {
           && root.service.currentSink.id === modelData.id)
 
         MouseArea {
+        preventStealing: true
           anchors.fill: parent
           hoverEnabled: true
           cursorShape: Qt.PointingHandCursor
@@ -180,6 +182,7 @@ Column {
           && root.service.streamRate > 0)
 
         MouseArea {
+        preventStealing: true
           anchors.fill: parent
           cursorShape: Qt.PointingHandCursor
           onClicked: root.service.matchRate()
@@ -198,6 +201,7 @@ Column {
     implicitHeight: providerLabel.implicitHeight + Style.spacing.rowPaddingX
 
     MouseArea {
+        preventStealing: true
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
@@ -246,6 +250,7 @@ Column {
       font.pixelSize: Style.font.caption
       font.underline: true
       MouseArea {
+        preventStealing: true
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor
         onClicked: if (root.service) root.service.stop()
@@ -258,6 +263,7 @@ Column {
       font.pixelSize: Style.font.caption
       font.underline: true
       MouseArea {
+        preventStealing: true
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor
         onClicked: if (root.service) root.service.restartDaemon()
@@ -270,6 +276,7 @@ Column {
       font.pixelSize: Style.font.caption
       font.underline: true
       MouseArea {
+        preventStealing: true
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor
         onClicked: if (root.service) root.service.quitDaemon()
@@ -295,6 +302,7 @@ Column {
         font.underline: modelData && modelData.active === true
 
         MouseArea {
+        preventStealing: true
           anchors.fill: parent
           hoverEnabled: true
           cursorShape: Qt.PointingHandCursor

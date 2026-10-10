@@ -108,6 +108,7 @@ Item {
     id: mouse
     anchors.fill: parent
     hoverEnabled: true
+    preventStealing: true
     enabled: root.enabled
     cursorShape: Qt.PointingHandCursor
     onClicked: root.activated()

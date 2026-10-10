@@ -167,7 +167,7 @@ Column {
       keyNavigationEnabled: false
       boundsBehavior: Flickable.StopAtBounds
       interactive: contentHeight > height
-      ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+      ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; interactive: false }
 
       // currentIndex is deliberately not bound to the panel's cursor. ListView writes
       // that property itself on every model swap, which breaks a QML binding for good
@@ -186,6 +186,7 @@ Column {
         MouseArea {
           anchors.fill: parent
           hoverEnabled: true
+          preventStealing: true
           cursorShape: Qt.PointingHandCursor
           onClicked: root.service.playResult(modelData)
         }

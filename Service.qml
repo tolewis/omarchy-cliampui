@@ -692,7 +692,8 @@ Item {
   }
 
   function playCatalogItem(id) {
-    if (!id || catalogPlayProcess.running) return
+    if (!id) return
+    if (catalogPlayProcess.running) catalogPlayProcess.running = false
     catalogPlayProcess.command = [cliampPath].concat(Model.providerLoadArgs(activeProviderKey, id))
     catalogPlayProcess.running = true
   }
@@ -843,6 +844,10 @@ Item {
   Process {
     id: catalogPlayProcess
     command: []
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (String(text || "").length > 0) root.catalogError = Model.elideError(text)
+    }
     onExited: settleTimer.restart()
   }
 

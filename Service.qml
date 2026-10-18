@@ -41,8 +41,8 @@ Item {
     rebuildNodes()
   }
 
-  // cliamp's own status is the truth. MPRIS only fills gaps and provides seeking, so a
-  // stale or missing player object can no longer freeze the panel.
+  // cliamp's own status is the truth. MPRIS only fills gaps, so a stale or missing
+  // player object can no longer freeze the panel.
   readonly property bool running: status.ok === true || player !== null
   readonly property bool hasTrack: running && (title.length > 0 || artist.length > 0)
   readonly property bool isPlaying: status.ok === true
@@ -52,17 +52,17 @@ Item {
   readonly property string artist: String(status.artist || (player ? player.trackArtist : "") || "")
   readonly property string album: String(status.album || (player ? player.trackAlbum : "") || "")
 
-  // cliamp publishes no mpris:artUrl for anything, local or remote, so the cover is
-  // derived from the Subsonic stream URL it does publish. The MPRIS value is still
-  // preferred in case a future release starts sending one.
-  // Held rather than recomputed to empty. The cover is derived from the stream path, so
-  // any moment without a status, between tracks or while the socket changes owner,
-  // would otherwise blank the artwork and flash the placeholder.
+  // Held rather than recomputed to empty. Any moment without a status, between tracks or
+  // while the socket changes owner, would otherwise blank the artwork and flash the
+  // placeholder. cliamp 2 sends album_art_url for provider tracks, which comes first; a
+  // Navidrome cover is still derived from the Subsonic stream URL.
   property string artUrl: ""
   property int artSizePx: 300
 
   readonly property string resolvedArtUrl: {
     if (!running) return ""
+    var fromCliamp = safeArtUrl(status.artUrl)
+    if (fromCliamp.length > 0) return fromCliamp
     var fromMpris = player ? safeArtUrl(player.trackArtUrl) : ""
     if (fromMpris.length > 0) return fromMpris
     return safeArtUrl(Model.coverArtUrlFromStreamPath(status.path, artSizePx))
@@ -79,20 +79,20 @@ Item {
     return 0
   }
 
-  // Measured on 1.63.2: seeking a Navidrome track advances the queue instead of moving
-  // within it, because these arrive as HTTP streams and cliamp cannot reposition one. A
-  // duration is still known, so the bar is drawn, but it must not be interactive.
   readonly property bool hasProgress: running && lengthSec > 0
-  readonly property bool canSeek: hasProgress && !isStream
+  // cliamp 2 says per track whether it can seek. A live station and some HTTP streams
+  // cannot, and a cliamp radio channel track can.
+  readonly property bool canSeek: hasProgress && status.seekable === true
 
   readonly property bool shuffle: status.shuffle === true
   readonly property string repeat: String(status.repeat || "Off")
   readonly property int total: Number(status.total || 0)
+  readonly property int queueIndex: Number(status.index)
   readonly property real volumeDb: Number(status.volumeDb || 0)
   readonly property bool isStream: status.isStream === true
 
-  // Ticked locally between MPRIS updates, because polling Position over D-Bus four
-  // times a second is traffic for something the panel can count on its own.
+  // Ticked locally between status reads, because polling Position four times a second
+  // is traffic for something the panel can count on its own.
   property real positionSec: 0
   property bool _askedAtEnd: false
 
@@ -132,17 +132,263 @@ Item {
     return ""
   }
 
-  // Held optimistically so the button flips on press instead of waiting for the poll,
-  // then released as soon as cliamp reports the same thing.
+  // ---- notices ----
+
+  // The one line that tells the operator why a click did nothing. Every failed
+  // operation lands here, and it clears itself so an old failure does not linger.
+  property string notice: ""
+
+  function showNotice(text) {
+    notice = String(text || "")
+    if (notice.length > 0) noticeTimer.restart()
+  }
+
+  Timer {
+    id: noticeTimer
+    interval: 8000
+    repeat: false
+    onTriggered: root.notice = ""
+  }
+
+  // ---- version 2 IPC ----
+
+  // cliamp 2 speaks only version 2 on ~/.config/cliamp/cliamp.sock. Two connections are
+  // kept: one carries requests and their replies, and one is subscribed to runtime
+  // events. Measured on 2.3.0: a connection that has subscribed is reset by the daemon
+  // if it then sends a request, so the two cannot share one socket.
+  readonly property string socketPath: (Quickshell.env("HOME") || "") + "/.config/cliamp/cliamp.sock"
+
+  // The socket changes owner whenever the daemon relaunches. Measured on Quickshell
+  // 0.3.0: one connect against a missing path bricks a Socket for good, so every retry
+  // has to be a brand new Socket.
+  readonly property bool ipcConnected: !!(ipcLoader.item && ipcLoader.item.connected)
+  readonly property bool eventsConnected: !!(eventLoader.item && eventLoader.item.connected)
+
+  property int _requestSeq: 0
+  // Request id -> handler for the reply. Job id -> pending job record.
+  property var _replies: ({})
+  property var _jobs: ({})
+  property int pendingJobCount: 0
+
+  function _write(request) {
+    if (!ipcConnected) return false
+    request.version = Model.IPC_VERSION
+    request.id = "cliampui-" + (++_requestSeq)
+    ipcLoader.item.write(JSON.stringify(request) + "\n")
+    ipcLoader.item.flush()
+    return request.id
+  }
+
+  // A read answered in place, such as state.get.
+  function request(method, extra, onReply) {
+    var body = { method: method }
+    if (extra) { for (var key in extra) body[key] = extra[key] }
+    var id = _write(body)
+    if (id === false) return false
+    if (onReply) _replies[id] = onReply
+    return true
+  }
+
+  // An operation is answered with a job at once, and finishes later. The handler gets
+  // the terminal job: from the reply when it is already done, else from the runtime.job
+  // event, else from a job.get poll if the event never comes. Nothing is dropped while
+  // an earlier operation runs, so a fast second click is never lost.
+  function submit(operation, params, onDone) {
+    if (!ipcConnected) {
+      _finishJob({ state: "failed", operation: operation, error: { message: "cliamp is not running" } }, onDone)
+      return false
+    }
+    var sent = request("operation.submit", { operation: operation, params: params || {} }, function (reply) {
+      if (!reply || reply.ok !== true || !reply.job) {
+        var refused = { state: "failed", operation: operation, error: reply ? reply.error : null }
+        root._finishJob(refused, onDone)
+        return
+      }
+      var job = reply.job
+      if (Model.jobTerminal(job)) { root._finishJob(job, onDone); return }
+      var jobs = root._jobs
+      jobs[String(job.id)] = { done: onDone, since: Date.now(), polled: 0, operation: operation }
+      root.pendingJobCount = Object.keys(jobs).length
+    })
+    return sent
+  }
+
+  function _finishJob(job, onDone) {
+    if (job && job.snapshot) applySnapshot(job.snapshot)
+    var err = Model.jobError(job)
+    if (err.length > 0 && !onDone) showNotice(String(job.operation || "command") + ": " + err)
+    if (onDone) onDone(job, err)
+  }
+
+  function _resolveJob(job) {
+    if (!job || !job.id) return
+    var key = String(job.id)
+    var entry = _jobs[key]
+    if (!entry || !Model.jobTerminal(job)) return
+    delete _jobs[key]
+    pendingJobCount = Object.keys(_jobs).length
+    _finishJob(job, entry.done)
+  }
+
+  function _failAllJobs(reason) {
+    var jobs = _jobs
+    _jobs = ({})
+    _replies = ({})
+    pendingJobCount = 0
+    for (var key in jobs) {
+      var entry = jobs[key]
+      if (entry) _finishJob({ state: "failed", operation: entry.operation, error: { message: reason } }, entry.done)
+    }
+  }
+
+  // The fallback for a lost runtime.job event: ask after a second, then every second,
+  // and give up after a minute so a job the daemon forgot cannot hold a row busy.
+  Timer {
+    id: jobPollTimer
+    interval: 1000
+    repeat: true
+    running: root.pendingJobCount > 0 && root.ipcConnected
+    onTriggered: {
+      var now = Date.now()
+      var jobs = root._jobs
+      for (var key in jobs) {
+        var entry = jobs[key]
+        if (now - entry.since > 60000) {
+          delete jobs[key]
+          root._finishJob({ state: "failed", operation: entry.operation, error: { message: "cliamp did not finish " + entry.operation } }, entry.done)
+          continue
+        }
+        if (now - entry.since < 1000) continue
+        root.request("job.get", { job_id: key }, function (reply) {
+          if (reply && reply.job) root._resolveJob(reply.job)
+        })
+      }
+      root.pendingJobCount = Object.keys(jobs).length
+    }
+  }
+
+  // Revisions only move forward while one daemon runs. A late job snapshot must not undo
+  // a newer event, but a restarted daemon counts from 1 again, which a reconnect resets.
+  function applySnapshot(snapshot) {
+    var parsed = Model.parseSnapshot(snapshot)
+    if (status.ok === true && parsed.revision > 0 && parsed.revision < status.revision) return
+    status = parsed
+    lastError = ""
+    positionSec = Number(parsed.positionSec || 0)
+  }
+
+  function refreshStatus() {
+    request("state.get", null, function (reply) {
+      if (reply && reply.ok === true && reply.snapshot) { root.applySnapshot(reply.snapshot); return }
+      root.lastError = Model.errorText(reply ? reply.error : null)
+    })
+  }
+
+  function _routeReply(raw) {
+    var data = Model.parseObject(raw)
+    if (data === null || data.id === undefined) return
+    var id = String(data.id)
+    var handler = _replies[id]
+    if (!handler) return
+    delete _replies[id]
+    handler(data)
+  }
+
+  function _routeEvent(raw) {
+    var data = Model.parseObject(raw)
+    if (data === null) return
+    var name = String(data.event || "")
+    if (name === "runtime.state") { applySnapshot(data.data); return }
+    if (name === "runtime.job") { if (data.data && data.data.job) _resolveJob(data.data.job); return }
+    // The daemon closes a stream it could not keep up with. The snapshot is re-read.
+    if (name === "system.overflow") { eventLoader.active = false; eventLoader.active = true; refreshStatus() }
+  }
+
+  Loader {
+    id: ipcLoader
+    active: true
+    sourceComponent: Socket {
+      path: root.socketPath
+      connected: true
+
+      // Handled on the root's ipcConnected, which is only true once this Socket is the
+      // Loader's item. Writing from here ran before that and was silently lost.
+
+      parser: SplitParser {
+        splitMarker: "\n"
+        onRead: function (line) { root._routeReply(String(line || "")) }
+      }
+    }
+  }
+
+  Loader {
+    id: eventLoader
+    active: true
+    sourceComponent: Socket {
+      path: root.socketPath
+      connected: true
+
+      onConnectionStateChanged: {
+        if (!connected) return
+        write(JSON.stringify({ version: Model.IPC_VERSION, id: "cliampui-events", method: "subscribe",
+          topics: ["runtime.state", "runtime.job"] }) + "\n")
+        flush()
+      }
+
+      parser: SplitParser {
+        splitMarker: "\n"
+        onRead: function (line) { root._routeEvent(String(line || "")) }
+      }
+    }
+  }
+
+  Timer {
+    id: reconnectTimer
+    interval: 700
+    repeat: true
+    // No assignment to running anywhere: the binding is the only thing that can stop
+    // this, so a later disconnect can always start it again.
+    running: !root.ipcConnected || !root.eventsConnected
+    onTriggered: {
+      if (!root.ipcConnected) { ipcLoader.active = false; ipcLoader.active = true }
+      if (!root.eventsConnected) { eventLoader.active = false; eventLoader.active = true }
+    }
+  }
+
+  onIpcConnectedChanged: {
+    if (ipcConnected) {
+      goneTimer.stop()
+      // A new connection may be a new daemon whose revisions start again at 1.
+      status = Object.assign({}, status, { revision: 0 })
+      refreshStatus()
+      readProviders()
+      return
+    }
+    goneTimer.restart()
+    _failAllJobs("cliamp disconnected")
+    dropLyricsRequest()
+  }
+
+  // The socket drops briefly whenever the daemon restarts. Blanking the artwork and
+  // title for that window is worse than briefly showing the last known track, so the
+  // state is only cleared once cliamp has genuinely stayed away.
+  Timer {
+    id: goneTimer
+    interval: 6000
+    repeat: false
+    onTriggered: {
+      if (root.ipcConnected) return
+      root.status = Model.defaultStatus()
+      root.artUrl = ""
+    }
+  }
+
+  // ---- transport ----
+
+  // Held optimistically so the button flips on press instead of waiting for the event,
+  // then released as soon as cliamp reports the same thing or the operation fails.
   property int pendingPlaying: -1
   readonly property bool showPlaying: pendingPlaying === -1 ? isPlaying : pendingPlaying === 1
-
-  function playPause() {
-    pendingPlaying = isPlaying ? 0 : 1
-    playHold.restart()
-    if (send('{"cmd":"toggle"}')) { settleTimer.restart(); return }
-    if (running) player.togglePlaying()
-  }
 
   // Never let an optimistic flip stick if cliamp disagrees.
   Timer {
@@ -152,53 +398,98 @@ Item {
     onTriggered: root.pendingPlaying = -1
   }
 
+  // A transport operation reports its own failure, and the notice says what it was.
+  function transport(operation, params) {
+    if (submit(operation, params, function (job, err) {
+      if (err.length > 0) { root.pendingPlaying = -1; root.showNotice(err) }
+    })) return true
+    return false
+  }
+
+  // Measured on 2.3.0: after the daemon sits idle its Spotify connection goes stale,
+  // and the first play fails with "broken pipe" in cliamp.log while the job itself
+  // succeeds. The second attempt plays. So a start is watched: one quiet retry, and
+  // then a sentence instead of silence.
+  property string _startLabel: ""
+  property int _startTries: 0
+
+  function watchStart(label) {
+    _startLabel = String(label || "")
+    _startTries = 0
+    startWatch.restart()
+  }
+
+  Timer {
+    id: startWatch
+    interval: 3500
+    repeat: false
+    onTriggered: {
+      if (root.status.state === "playing" || root.status.state === "paused") return
+      if (root._startTries === 0) {
+        root._startTries = 1
+        root.submit("play", {}, null)
+        restart()
+        return
+      }
+      var what = root._startLabel.length > 0 ? root._startLabel : "the track"
+      root.showNotice("cliamp could not start " + what + ". Press play to try again.")
+    }
+  }
+
+  function playPause() {
+    if (!ipcConnected) {
+      if (player) player.togglePlaying()
+      else showNotice("cliamp is not running")
+      return
+    }
+    // An empty queue has nothing to play, and saying so beats a button that does nothing.
+    if (!isPlaying && status.ok === true && status.state === "stopped" && total === 0) {
+      showNotice("Nothing is queued. Pick a station or playlist below.")
+      return
+    }
+    pendingPlaying = isPlaying ? 0 : 1
+    playHold.restart()
+    if (!isPlaying) watchStart(title)
+    transport(isPlaying ? "pause" : "play")
+  }
+
   function next() {
-    if (send('{"cmd":"next"}')) { settleTimer.restart(); return }
-    if (running) player.next()
+    if (!transport("next") && player) player.next()
   }
 
   function previous() {
-    if (send('{"cmd":"prev"}')) { settleTimer.restart(); return }
-    if (running) player.previous()
+    if (!transport("prev") && player) player.previous()
   }
 
-  // Measured on 1.63.2: the socket seek takes a delta, not a position, whatever
-  // `cliamp seek --help` says. The delta comes off the interpolated position rather than
-  // the last polled one, which is up to a whole poll interval stale. MPRIS is the fallback.
+  function stop() { startWatch.stop(); transport("stop") }
+
+  function toggleShuffle() { transport("shuffle") }
+
+  function cycleRepeat() { transport("repeat") }
+
+  function setDevice(name) {
+    if (!name) return
+    transport("device", { name: String(name) })
+  }
+
+  // seek.absolute takes a position, so nothing depends on how stale the last read is.
   function seekTo(targetSec) {
     if (!canSeek) return
     var target = Math.max(0, Math.min(lengthSec, Number(targetSec) || 0))
-    var delta = Math.round(target - positionSec)
     positionSec = target
-    if (send('{"cmd":"seek","value":' + delta + '}')) { settleTimer.restart(); return }
-    if (player) player.seek(target - Number(player.position || 0))
+    transport("seek.absolute", { value: target })
   }
 
   function seekBy(deltaSec) { seekTo(positionSec + Number(deltaSec || 0)) }
 
-  // cliamp speaks newline delimited JSON on its own socket, so status needs no
-  // subprocess at all. One connection replaces a spawn every couple of seconds.
-  readonly property string socketPath: (Quickshell.env("HOME") || "") + "/.config/cliamp/cliamp.sock"
+  // ---- lyrics ----
 
-  function refreshStatus() {
-    if (!ipcConnected) return
-    ipcLoader.item.write('{"cmd":"status"}\n')
-    ipcLoader.item.flush()
-  }
-
-  // Every verb the docs define on the socket goes the same way.
-  function send(payload) {
-    if (!ipcConnected) return false
-    ipcLoader.item.write(payload + "\n")
-    ipcLoader.item.flush()
-    return true
-  }
-
-  // cliamp resolves lyrics itself, from embedded tags then LRCLIB then NetEase, and
-  // serves them on the same socket. Undocumented, measured: {"cmd":"lyrics"} answers
-  // {"ok":true,"lyrics":[{"start":30.23,"text":"..."}]}.
+  // cliamp resolves lyrics itself, from embedded tags then LRCLIB then NetEase. The
+  // lyrics operation finishes with {"ok":true,"lyrics":[{"start":30.23,"text":"..."}]},
+  // and a track with no lyrics fails the job with "no lyrics found".
   property var lyrics: []
   property string lyricsTrackPath: ""
+  property string lyricsPendingPath: ""
 
   readonly property bool hasLyrics: lyrics.length > 0
   // cliamp reports the position it has decoded to. Over A2DP the ears are about a
@@ -228,29 +519,28 @@ Item {
     ? String(lyrics[activeLyricIndex].text || "")
     : ""
 
-  property string lyricsPendingPath: ""
-
   function refreshLyrics() {
     var path = String(status.path || "")
     if (path.length === 0) { lyrics = []; lyricsTrackPath = ""; return }
     if (path === lyricsTrackPath) return
     lyrics = []
-    // One request outstanding at a time. The reply carries no track, so the path the
+    // One request outstanding at a time. The job carries no track, so the path the
     // single outstanding request was sent for is the only thing that can attribute it.
     if (lyricsPendingPath.length > 0) return
-    // Marked fetched only once the request is actually out, or one dropped write
-    // suppresses every retry for the rest of the track.
-    if (send('{"cmd":"lyrics"}')) { lyricsPendingPath = path; lyricsTrackPath = path; lyricsTimeout.restart() }
-  }
-
-  // cliamp answers every request, so this only fires when a reply arrives in a shape the
-  // router does not recognise. Only the slot is freed: the track keeps its fetched mark,
-  // so one lost reply costs that track its lyrics rather than a request every 5 seconds.
-  Timer {
-    id: lyricsTimeout
-    interval: 5000
-    repeat: false
-    onTriggered: root.lyricsPendingPath = ""
+    var sent = submit("lyrics", {}, function (job, err) {
+      var wanted = root.lyricsPendingPath
+      root.lyricsPendingPath = ""
+      if (wanted !== String(root.status.path || "")) {
+        // The track changed while this was in flight. Ask again for what is playing.
+        root.lyricsTrackPath = ""
+        root.refreshLyrics()
+        return
+      }
+      // A failed job is cliamp saying it has no lyrics. The track keeps its fetched
+      // mark, so it is not asked again for the rest of the track.
+      root.lyrics = err.length === 0 ? Model.parseLyrics(job.result) : []
+    })
+    if (sent) { lyricsPendingPath = path; lyricsTrackPath = path }
   }
 
   // A reply lost with the connection is worth asking for again, and only that case is.
@@ -260,99 +550,15 @@ Item {
     lyricsTrackPath = ""
   }
 
-  function acceptLyrics(raw) {
-    var wanted = lyricsPendingPath
-    lyricsPendingPath = ""
-    lyricsTimeout.stop()
-    if (wanted === String(status.path || "")) { lyrics = Model.parseLyrics(raw); return }
-    // The track changed while this was in flight, so it answers a question nobody is
-    // asking now. Re-arm and ask again for whatever is playing.
-    lyricsTrackPath = ""
-    refreshLyrics()
-  }
-
   function syncPosition() {
     if (status.ok === true) positionSec = Number(status.positionSec || 0)
     else if (player && player.positionSupported) positionSec = Number(player.position || 0)
     if (panelOpen) refreshStatus()
   }
 
-  // The socket changes owner whenever the daemon relaunches or hands over to an
-  // interactive session. Measured on Quickshell 0.3.0: one connect against a missing
-  // path (ServerNotFoundError) bricks a Socket for good, and no later write to
-  // connected or path ever tries again, so every retry has to be a brand new Socket.
-  readonly property bool ipcConnected: !!(ipcLoader.item && ipcLoader.item.connected)
-
-  Loader {
-    id: ipcLoader
-    active: true
-    sourceComponent: Socket {
-      path: root.socketPath
-      connected: true
-
-      // On connect ask for status at once; on drop abandon the lyrics request in flight.
-      onConnectionStateChanged: {
-        if (connected) { root.refreshStatus(); return }
-        root.dropLyricsRequest()
-      }
-
-      parser: SplitParser {
-        splitMarker: "\n"
-        onRead: function (line) {
-          var raw = String(line || "")
-          var kind = Model.messageKind(raw)
-          // Every command answers on this socket too, and an acknowledgement carries no
-          // track, so parsing one as a status blanked the panel until the next poll.
-          // An acknowledgement that failed is the only report a command ever gets.
-          if (kind === "lyrics") { root.acceptLyrics(raw); return }
-          if (kind === "ack") { root.lastError = Model.ackError(raw); return }
-          if (kind !== "status") return
-          var parsed = Model.parseStatus(raw)
-          root.status = parsed
-          root.lastError = parsed.ok ? "" : parsed.lastError
-          // The feed carries position, so the local tick only fills the gaps between polls.
-          if (parsed.ok) root.positionSec = Number(parsed.positionSec || 0)
-        }
-      }
-    }
-  }
-
-  Timer {
-    id: reconnectTimer
-    interval: 700
-    repeat: true
-    // No assignment to running anywhere: the binding is the only thing that can stop
-    // this, so a later disconnect can always start it again.
-    running: !root.ipcConnected
-    onTriggered: {
-      if (root.ipcConnected) return
-      ipcLoader.active = false
-      ipcLoader.active = true
-    }
-    onRunningChanged: {
-      if (running) goneTimer.restart()
-      else goneTimer.stop()
-    }
-  }
-
-  // The socket drops briefly whenever the daemon restarts. Blanking the artwork and
-  // title for that window is worse than briefly showing the last known track, so the
-  // state is only cleared once cliamp has genuinely stayed away.
-  Timer {
-    id: goneTimer
-    interval: 6000
-    repeat: false
-    onTriggered: {
-      if (root.ipcConnected) return
-      root.status = Model.defaultStatus()
-      root.artUrl = ""
-    }
-  }
-
   // cliamp's own 10 band spectrum, the same feed its first-party widget draws. visstream
-  // holds one IPC connection open and emits a frame per tick, which the docs give as the
-  // way to consume it from a UI toolkit. It runs only while the popup is open and
-  // playing, so a shut panel costs nothing.
+  // holds one IPC connection open and emits a frame per tick. It runs only while the
+  // popup is open and playing, so a shut panel costs nothing.
   property var bands: []
 
   Process {
@@ -369,6 +575,7 @@ Item {
     onRunningChanged: if (!running) root.bands = []
   }
 
+  // Events carry every state change, but not the position, so the poll stays for that.
   Timer {
     id: statusTimer
     interval: root.statusIntervalMs
@@ -385,10 +592,9 @@ Item {
     running: root.panelOpen && root.isPlaying
     onTriggered: {
       var next = root.positionSec + interval / 1000
-      // A repeat restarts the track without MPRIS reporting a track change, so the
-      // position is asked for at the end rather than clamped and left stale. Asked
-      // once, because a duration shorter than the audio would poll four times a
-      // second for the rest of the track.
+      // A repeat restarts the track without a track change, so the position is asked
+      // for at the end rather than clamped and left stale. Asked once, because a
+      // duration shorter than the audio would poll four times a second.
       if (root.lengthSec > 0 && next >= root.lengthSec) {
         if (!root._askedAtEnd) { root._askedAtEnd = true; root.refreshStatus() }
         return
@@ -414,6 +620,7 @@ Item {
     readSinkAvailability()
     readPlaylists()
     readLibrary()
+    readProviders()
   }
 
   // ---- PipeWire routing and the signal verdict ----
@@ -637,11 +844,161 @@ Item {
 
   Component.onDestruction: releaseRate()
 
+
   // ---- actions ----
+
+  // ---- sources: providers, their playlists and stations ----
+
+  // The providers cliamp has configured, from provider.list. cliamp 2 has no active
+  // provider, so the one being browsed is the panel's own choice and never changes
+  // what plays until a row is clicked.
+  property var providers: []
+  property string selectedProviderKey: ""
+
+  // Browsing starts where the music is: the provider of the loaded playlist, else
+  // cliamp radio, else whatever is configured first.
+  readonly property string browseProviderKey: {
+    if (selectedProviderKey.length > 0 && Model.providerByKey(providers, selectedProviderKey)) return selectedProviderKey
+    var playing = Model.playlistRef(status.playlist).provider
+    if (playing.length > 0 && Model.providerByKey(providers, playing)) return playing
+    if (Model.providerByKey(providers, "cliamp")) return "cliamp"
+    return providers.length > 0 ? String(providers[0].key) : ""
+  }
+  readonly property var browseProvider: Model.providerByKey(providers, browseProviderKey)
+  readonly property bool browseSearchable: !!(browseProvider && browseProvider.searchable)
+
+  // Rows per provider, kept so switching tabs back and forth costs no round trip.
+  property var _sourceCache: ({})
+  property var sourceRows: []
+  property int sourceHidden: 0
+  property bool sourceBusy: false
+  property string sourceError: ""
+
+  // The filter text and the provider's own answer to it. The filter narrows the
+  // listed rows at once, and a searchable provider is also asked, so a query reaches
+  // albums and stations that are not in the list.
+  property string sourceQuery: ""
+  property var searchRows: []
+  property bool searchBusy: false
+  property int _searchSeq: 0
+
+  readonly property var visibleSourceRows: searchRows.concat(Model.filterRows(sourceRows, sourceQuery))
+  readonly property int activeSourceIndex: Model.activeRowIndex(visibleSourceRows, status, soloPath)
+  property string soloPath: ""
+
+  // The row a click is loading. The latest click owns it, so a stale answer to an
+  // earlier click can neither clear it nor report an error over it.
+  property string loadingKey: ""
+
+  onBrowseProviderKeyChanged: showProvider(browseProviderKey)
+
+  function readProviders() {
+    submit("provider.list", {}, function (job, err) {
+      if (err.length > 0) return
+      root.providers = Model.parseProviders(job.result)
+    })
+  }
+
+  function selectProvider(key) {
+    var k = String(key || "")
+    if (k.length === 0) return
+    selectedProviderKey = k
+    if (k === browseProviderKey) showProvider(k)
+  }
+
+  function showProvider(key) {
+    searchRows = []
+    sourceError = ""
+    var cached = _sourceCache[key]
+    if (cached) {
+      sourceRows = cached.rows
+      sourceHidden = cached.hidden
+    } else {
+      sourceRows = []
+      sourceHidden = 0
+    }
+    if (!cached) refreshSource(key)
+    if (sourceQuery.length > 0) searchSources(sourceQuery)
+  }
+
+  // A catalog provider such as Radio pages its directory under provider.catalog, which
+  // also carries its playlists. The others list playlists only.
+  function refreshSource(key) {
+    var k = String(key || browseProviderKey)
+    if (k.length === 0) return
+    var provider = Model.providerByKey(providers, k)
+    var op = provider && provider.catalog ? "provider.catalog" : "provider.playlists"
+    if (k === browseProviderKey) { sourceBusy = true; sourceError = "" }
+    submit(op, { provider: k, limit: 200 }, function (job, err) {
+      if (k === root.browseProviderKey) root.sourceBusy = false
+      if (err.length > 0) {
+        if (k === root.browseProviderKey) root.sourceError = err
+        return
+      }
+      var parsed = Model.parseSourceRows(job.result, k)
+      var cache = root._sourceCache
+      cache[k] = parsed
+      if (k !== root.browseProviderKey) return
+      root.sourceRows = parsed.rows
+      root.sourceHidden = parsed.hidden
+    })
+  }
+
+  // Every keystroke gets its own search, and only the newest answer is shown. A search
+  // in flight never blocks the next one, so the list always ends on what was typed.
+  function searchSources(query) {
+    sourceQuery = String(query || "")
+    var q = sourceQuery.trim()
+    var seq = ++_searchSeq
+    if (q.length < 2 || !browseSearchable) { searchRows = []; searchBusy = false; return }
+    var key = browseProviderKey
+    searchBusy = true
+    submit("provider.search", { provider: key, query: q, limit: 30 }, function (job, err) {
+      if (seq !== root._searchSeq) return
+      root.searchBusy = false
+      if (err.length > 0) { root.searchRows = []; root.sourceError = err; return }
+      root.searchRows = Model.parseSearchRows(job.result, key)
+    })
+  }
+
+  function playSource(row) {
+    var req = Model.playRequest(row)
+    if (!req) return
+    var key = Model.rowKey(row)
+    var name = String(row.name || "")
+    loadingKey = key
+    sourceError = ""
+    submit(req.operation, req.params, function (job, err) {
+      if (root.loadingKey !== key) return
+      root.loadingKey = ""
+      if (err.length > 0) { root.sourceError = "Could not play " + name + ". " + err; return }
+      root.soloPath = req.operation === "track.play" ? String(row.id || "") : ""
+      if (Model.loadedNothing(job)) { root.sourceError = name + " has no tracks to play."; return }
+      root.watchStart(name)
+    })
+  }
+
+  // Channel up and down. While a click is still loading, the step counts from that row,
+  // so pressing twice quickly moves two rows instead of repeating the first.
+  function stepSource(delta) {
+    var rows = visibleSourceRows
+    var from = activeSourceIndex
+    if (loadingKey.length > 0) {
+      for (var i = 0; i < rows.length; i++) {
+        if (Model.rowKey(rows[i]) === loadingKey) { from = i; break }
+      }
+    }
+    var to = Model.adjacentRowIndex(rows.length, from, delta)
+    if (to < 0) return
+    playSource(rows[to])
+  }
+
+  // ---- library: Navidrome and saved playlists ----
 
   property var playlists: []
   property var results: []
   property string libraryQuery: ""
+  property bool libraryBusy: false
 
   // Server rows on their own. Saved playlists are matched locally and merged in front,
   // so a playlist list arriving late does not need a second server round trip.
@@ -672,6 +1029,7 @@ Item {
   function _dispatchLibrary() {
     if (albumProcess.running) return
     _dispatchedQuery = libraryQuery
+    libraryBusy = true
     albumProcess.command = libraryQuery.length > 0
       ? [libraryHelper, "search", libraryQuery]
       : [libraryHelper, "albums", "200"]
@@ -697,12 +1055,19 @@ Item {
         root._recomputeResults()
       }
     }
-    onExited: if (root._dispatchedQuery !== root.libraryQuery) root._dispatchLibrary()
+    onExited: {
+      root.libraryBusy = false
+      if (root._dispatchedQuery !== root.libraryQuery) root._dispatchLibrary()
+    }
   }
 
   Process {
     id: albumPlayProcess
     command: []
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (String(text || "").trim().length > 0) root.showNotice(Model.elideError(text))
+    }
     onExited: settleTimer.restart()
   }
 
@@ -726,18 +1091,16 @@ Item {
 
   // Loading a saved playlist is the only way a headless daemon can reach a Navidrome
   // library: the playlist keeps resolved stream URLs, and the browser is TUI only.
-  // Measured: load starts playing on its own, so nothing follows it here. The play that
-  // used to be sent 700 ms later was the only delayed action in the plugin.
+  // Measured: load starts playing on its own, so nothing follows it here. "Recently
+  // Played" loads the same way, and its first entry is the most recent track.
   function loadPlaylist(name) {
     if (!name) return
-    if (send('{"cmd":"load","playlist":' + JSON.stringify(String(name)) + '}')) {
-      settleTimer.restart()
-      return
-    }
-    if (actionProcess.running) return
-    actionProcess.command = [cliampPath, "load", String(name)]
-    actionProcess.running = true
-    settleTimer.restart()
+    var label = String(name)
+    submit("load", { playlist: label }, function (job, err) {
+      if (err.length > 0) { root.showNotice("Could not load " + label + ". " + err); return }
+      if (Model.loadedNothing(job)) { root.showNotice(label + " has no tracks to play."); return }
+      root.watchStart(label)
+    })
   }
 
   // Volume is cliamp's PipeWire stream volume, moved exactly the way the stock audio
@@ -752,24 +1115,6 @@ Item {
     if (!streamNode || !streamNode.audio) return
     streamNode.audio.muted = false
     streamNode.audio.volume = Math.max(0, Math.min(1, Number(value) || 0))
-  }
-
-  function setDevice(name) {
-    if (actionProcess.running || !name) return
-    actionProcess.command = [cliampPath, "device", String(name)]
-    actionProcess.running = true
-  }
-
-  function toggleShuffle() {
-    if (actionProcess.running) return
-    actionProcess.command = [cliampPath, "shuffle"]
-    actionProcess.running = true
-  }
-
-  function cycleRepeat() {
-    if (actionProcess.running) return
-    actionProcess.command = [cliampPath, "repeat"]
-    actionProcess.running = true
   }
 
   // cliamp cannot attach to a running instance, so the helper stops the daemon for
@@ -856,13 +1201,44 @@ Item {
     Quickshell.execDetached(["uwsm-app", "--", "foot", "--title=cliamp", cliampPath])
   }
 
+  // The menu's Open TUI entry, offered only while the daemon is stopped, because the
+  // TUI is what starts it.
+  function openTui() {
+    if (tuiProcess.running) return
+    tuiProcess.command = ["foot", "-e", cliampPath]
+    tuiProcess.running = true
+  }
+
+  // The menu is the only way to stop or restart the headless daemon from the bar, so
+  // the unit goes through its own one-shot process and the poll re-reads on exit.
+  readonly property string systemctlPath: "/usr/bin/systemctl"
+
+  function quitDaemon() {
+    if (sysProcess.running) return
+    sysProcess.command = [systemctlPath, "--user", "stop", "cliamp-daemon"]
+    sysProcess.running = true
+  }
+
+  function restartDaemon() {
+    if (sysProcess.running) return
+    sysProcess.command = [systemctlPath, "--user", "restart", "cliamp-daemon"]
+    sysProcess.running = true
+  }
+
   Process {
-    id: actionProcess
+    id: sysProcess
     command: []
-    // A cliamp verb takes a moment to land, so the panel re-reads rather than guessing.
     onExited: settleTimer.restart()
   }
 
+  Process {
+    id: tuiProcess
+    command: []
+    onExited: settleTimer.restart()
+  }
+
+  // A helper or a unit change takes a moment to land, so the panel re-reads rather
+  // than guessing. Operations need none of this: their job carries the new snapshot.
   Timer {
     id: settleTimer
     interval: 400

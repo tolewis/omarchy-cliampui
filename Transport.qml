@@ -41,7 +41,9 @@ Column {
     TransportButton {
       shape: root.service && root.service.showPlaying ? "pause" : "play"
       size: Style.space(34)
-      enabled: root.live
+      // Do not disable this when the status object is stale. The daemon can
+      // be playing while running is false, and a disabled button swallows the click.
+      enabled: true
       filled: true
       fillColor: Color.accent
       // The glyph sits on the accent disc, so it takes the background colour to read.
@@ -69,10 +71,29 @@ Column {
   Text {
     textFormat: Text.PlainText
     anchors.horizontalCenter: parent.horizontalCenter
-    // MPRIS reports HasTrackList false and the IPC has no queue read, so a count is
-    // the most this panel can honestly say about what is coming next.
-    text: root.service && root.service.total > 0 ? root.service.total + " in queue" : ""
+    text: {
+      if (!root.service || root.service.total <= 0) return ""
+      var at = root.service.queueIndex
+      return at >= 0 ? "Track " + (at + 1) + " of " + root.service.total : root.service.total + " in queue"
+    }
     color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    visible: text.length > 0
+  }
+
+  // Why the last action did nothing, or a stream that failed. Cleared on a timer.
+  Text {
+    width: parent.width
+    textFormat: Text.PlainText
+    wrapMode: Text.WordWrap
+    horizontalAlignment: Text.AlignHCenter
+    text: {
+      if (!root.service) return ""
+      if (root.service.notice.length > 0) return root.service.notice
+      return String(root.service.status.streamError || "")
+    }
+    color: root.foreground
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption
     visible: text.length > 0

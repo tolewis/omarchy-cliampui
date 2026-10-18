@@ -38,6 +38,7 @@ Column {
     implicitHeight: summaryLabel.implicitHeight + Style.spacing.rowPaddingX
 
     MouseArea {
+      preventStealing: true
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
@@ -95,6 +96,7 @@ Column {
           && root.service.currentSink.id === modelData.id)
 
         MouseArea {
+          preventStealing: true
           anchors.fill: parent
           hoverEnabled: true
           cursorShape: Qt.PointingHandCursor
@@ -180,10 +182,55 @@ Column {
           && root.service.streamRate > 0)
 
         MouseArea {
+          preventStealing: true
           anchors.fill: parent
           cursorShape: Qt.PointingHandCursor
           onClicked: root.service.matchRate()
         }
+      }
+    }
+  }
+
+  // The headless daemon has no other control in the bar, so it lives here.
+  Row {
+    spacing: Style.space(14)
+    Text {
+      text: "Stop"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.underline: true
+      MouseArea {
+        preventStealing: true
+        anchors.fill: parent
+        cursorShape: Qt.PointingHandCursor
+        onClicked: if (root.service) root.service.stop()
+      }
+    }
+    Text {
+      text: "Restart"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.underline: true
+      MouseArea {
+        preventStealing: true
+        anchors.fill: parent
+        cursorShape: Qt.PointingHandCursor
+        onClicked: if (root.service) root.service.restartDaemon()
+      }
+    }
+    Text {
+      text: "Quit"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.underline: true
+      MouseArea {
+        preventStealing: true
+        anchors.fill: parent
+        cursorShape: Qt.PointingHandCursor
+        onClicked: if (root.service) root.service.quitDaemon()
       }
     }
   }

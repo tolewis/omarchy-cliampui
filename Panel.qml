@@ -87,6 +87,11 @@ Panel {
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
     function playpause(): string { cliamp.playPause(); return "ok" }
+    function next(): string { cliamp.next(); return "ok" }
+    function previous(): string { cliamp.previous(); return "ok" }
+    // Channel up and down for a keybinding, the same step as [ and ] in the panel.
+    function nextsource(): string { cliamp.stepSource(1); return "ok" }
+    function prevsource(): string { cliamp.stepSource(-1); return "ok" }
     function signal(): string { return cliamp.signalVerdict.text }
     function output(): string {
       root.sheetOpen = !root.sheetOpen
@@ -129,14 +134,14 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(560))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(760))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
       // Every letter is forwarded to a focused editor as well as to onTextKey, so a
       // search for a track name would otherwise skip tracks and launch a terminal.
-      blocked: library.searchFocused
+      blocked: library.searchFocused || sources.searchFocused
 
       onMoveRequested: function (dx, dy) {
         if ((root.sheetOpen || root.libraryOpen) && dy !== 0) { root.moveCursor(dy); return }
@@ -154,6 +159,9 @@ Panel {
         if (key === "o") { root.sheetOpen = !root.sheetOpen; root.libraryOpen = false; root.cursorIndex = 0 }
         else if (key === "/") { root.libraryOpen = !root.libraryOpen; root.sheetOpen = false; root.cursorIndex = 0 }
         else if (key === "f") cliamp.openPlayer()
+        // Channel up and down: load the source row above or below the one playing.
+        else if (key === "]") cliamp.stepSource(1)
+        else if (key === "[") cliamp.stepSource(-1)
         else if (!cliamp.running) return
         else if (key === "n") cliamp.next()
         else if (key === "b") cliamp.previous()
@@ -191,6 +199,14 @@ Panel {
           Transport {
             width: parent.width
             bar: root.bar
+            service: cliamp
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Sources {
+            id: sources
+            width: parent.width
             service: cliamp
             foreground: root.foreground
             fontFamily: root.fontFamily

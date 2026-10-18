@@ -15,7 +15,12 @@ which is what PipeWire does by default to everything.
   interface, so it costs nothing while the panel is shut.
 - **A live level meter** driven by PipeWire's own peak data, not by a second process.
 - **Transport**: play, pause, next, previous, shuffle and repeat, plus a scrubber that
-  hides itself for radio rather than pretending a stream can be seeked.
+  shows only when cliamp reports the track as seekable.
+- **Sources**: one chip per provider cliamp has configured (cliamp radio, Radio,
+  local playlists, podcasts, Spotify). The list shows that provider's channels,
+  stations or playlists, and the field filters it and searches the provider. A click
+  plays the row. The playing row is marked, and `[` and `]` change to the row above
+  or below it.
 - **Output routing** per application. Switching here moves cliamp's own stream and
   leaves the system default alone, so your notifications keep going where they were.
 - **A signal verdict** that only says "bit-perfect" when it really is, and otherwise
@@ -59,6 +64,7 @@ back from the sink, so the panel cannot claim a route it did not get.
 | --- | --- |
 | `space` / `enter` | play or pause, or pick a device when the output list is open |
 | `n` / `b` | next and back |
+| `[` / `]` | previous and next channel, station or playlist in the Sources list |
 | `j` / `k` / `up` / `down` | move the cursor when a list is open |
 | `h` / `l` / `left` / `right` | seek 5 seconds. Inert on a stream, where a seek would skip the track |
 | `o` | open and close the output list |
@@ -80,7 +86,8 @@ Left click opens the panel, right click plays or pauses without opening it.
 
 ## Requirements
 
-- `cliamp` on `PATH`
+- `cliamp` 2.3 or later on `PATH`. The panel speaks cliamp's version 2 IPC protocol,
+  and cliamp 1.x answers none of its requests.
 - PipeWire, with `pw-metadata` and `pactl` available, both of which ship with it
 - `omarchy-audio-sink-availability`, part of Omarchy, used to hide outputs with
   nothing plugged into them
@@ -147,8 +154,8 @@ so starting it while the daemon holds the socket would create a second, IPC-less
 this panel cannot see. The Start row therefore appears only when the socket is free.
 
 **Lyrics are cliamp's, not this plugin's.** cliamp resolves them from embedded tags,
-then LRCLIB, then NetEase, and answers `{"cmd":"lyrics"}` on its socket with a list of
-timestamped lines. The panel only draws them, so nothing here reaches the network and
+then LRCLIB, then NetEase, and answers the `lyrics` operation on its socket with a list
+of timestamped lines. The panel only draws them, so nothing here reaches the network and
 a track with no lyrics shows no line at all.
 
 **Lyrics are shifted to match the sound, not the decoder.** cliamp reports the position
@@ -158,11 +165,10 @@ subtracted automatically and re-read whenever the output changes. A headset also
 on the far side of the radio, where no host can measure it, so if the words still run
 ahead of what you hear, add the difference with the lyric timing trim in settings.
 
-**Navidrome tracks cannot be scrubbed.** They arrive as HTTP streams, and cliamp 1.63.2
-cannot reposition one. Asking it to seek one skips to the next track instead, and on the
-last track of a queue that presents as playback stopping. The progress bar is drawn from
-the duration the server reports, but it is deliberately not interactive for a stream, and
-the seek keys do nothing there. Local files scrub normally.
+**Only seekable tracks can be scrubbed.** cliamp reports whether the current track
+can seek, and the progress bar and the seek keys follow that flag. A live radio stream
+never seeks. The progress bar is drawn from the duration cliamp reports, but it is not
+interactive while the flag is off.
 
 **The volume slider moves cliamp's PipeWire stream, not cliamp's own gain.** It is the
 same thing the stock audio panel moves for `PipeWire ALSA [cliamp]`, so it changes only
@@ -195,6 +201,25 @@ there is no lossless path to them from any operating system. Apple does not send
 lossless over Bluetooth either; only AirPods Max on a wired USB-C connection carries
 it. The panel names the codec in use so you can pick the least-bad one with the
 Bluetooth settings, but none of them will earn a bit-perfect verdict.
+
+**Change channels from a keybinding.** The panel exposes the same steps over the
+shell's IPC, so a Hyprland binding can change the channel with the panel shut:
+
+```
+bind = SUPER ALT, bracketright, exec, omarchy-shell cliampui nextsource
+bind = SUPER ALT, bracketleft, exec, omarchy-shell cliampui prevsource
+```
+
+`next`, `previous` and `playpause` work the same way.
+
+**Spotify lists only playlists you own.** Spotify answers 403 when an app reads a
+playlist the account only follows, so the panel hides that section and shows how many
+rows it hid. Search reaches albums, and an album plays in full.
+
+**A play that does not start is retried once.** After a long idle period cliamp's
+first Spotify play can fail inside the daemon while the request still reports success.
+The panel watches for playback to start, presses play once more, and shows a notice
+if the music still has not started.
 
 **Enable this or the stock Media widget, not both.** They will both show the same track.
 

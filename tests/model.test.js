@@ -3,7 +3,7 @@
 
 const source = Deno.readTextFileSync(new URL("../Model.js", import.meta.url))
 const Model = new Function(
-  source + "; return { defaultStatus, parseStatus, rateFromNodeProps, sinkRateFromPactl, parseSinkAvailability, parsePlaylists, parseResults, matchPlaylists, messageKind, ackError, asBool, parseLyrics, activeLyricIndex, latencyMs, isSupportedOutputRate, parseBands, coverArtUrlFromStreamPath, transcodedFromPath, bluetoothCodecLabel, verdict, formatTime, elideError, MAX_ERROR_CHARS }"
+  source + "; return { defaultStatus, parseStatus, parseSnapshot, parseObject, errorText, messageKind, jobTerminal, jobError, friendlyError, loadedNothing, rateFromNodeProps, sinkRateFromPactl, parseSinkAvailability, parsePlaylists, parseResults, matchPlaylists, asBool, parseLyrics, activeLyricIndex, latencyMs, isSupportedOutputRate, parseBands, coverArtUrlFromStreamPath, transcodedFromPath, bluetoothCodecLabel, verdict, formatTime, elideError, MAX_ERROR_CHARS, RECENTLY_PLAYED, parseProviders, providerByKey, playlistRef, rowKey, parseSourceRows, parseSearchRows, playRequest, rowIsActive, activeRowIndex, adjacentRowIndex, filterRows, rowDetail, hiddenNote }"
 )()
 
 let failures = 0
@@ -16,63 +16,69 @@ function check(name, actual, expected) {
   }
 }
 
-// Byte for byte what a running TUI printed on the box, radio queue included.
-const radio = '{"ok":true,"state":"stopped","track":{"title":"Lofi Stream","path":"http://radio.cliamp.stream/lofi/stream","stream":true},"volume":-30,"total":11,"visualizer":"Bars","shuffle":false,"repeat":"Off","mono":false,"speed":1,"eq_preset":"Custom","eq_bands":[0,0,0,0,0,0,0,0,0,0]}'
+// Byte for byte from cliamp 2.3.0 on the box: state.get while a cliamp radio channel plays.
+const ncs = '{"version":2,"id":"cliampui-3","ok":true,"snapshot":{"revision":4,"playlist_revision":3,"state":"playing","track":{"title":"BE THERE WITH U","artist":"2frers","album":"BE THERE WITH U","path":"https://radio.cliamp.stream/ncs/tracks/b9092417fc7622db","stream":true},"logical_track":{"title":"BE THERE WITH U","artist":"2frers","album":"BE THERE WITH U","path":"https://radio.cliamp.stream/ncs/tracks/b9092417fc7622db","stream":true},"position":1.999818594,"duration":169.692471655,"seekable":true,"playlist":"cliamp:ncs","total":48,"shuffle":false,"repeat":"Off","mono":false,"speed":1,"eq_preset":"Custom","eq_bands":[0,0,0,0,0,0,0,0,0,0],"visualizer":"Bars"}}'
 
-const r = Model.parseStatus(radio)
-check("radio parses", r.ok, true)
-check("radio title", r.title, "Lofi Stream")
-check("radio is a stream", r.isStream, true)
-check("radio volume in dB", r.volumeDb, -30)
-check("radio queue depth", r.total, 11)
-check("radio repeat", r.repeat, "Off")
+const r = Model.parseStatus(ncs)
+check("v2 status parses", r.ok, true)
+check("v2 title", r.title, "BE THERE WITH U")
+check("v2 artist", r.artist, "2frers")
+check("a channel track is a stream", r.isStream, true)
+check("and it can still seek, which cliamp says itself", r.seekable, true)
+check("v2 names the loaded playlist", r.playlist, "cliamp:ncs")
+check("v2 queue depth", r.total, 48)
+check("an omitted index with a track is the first track", r.index, 0)
+check("an omitted volume is 0 dB", r.volumeDb, 0)
+check("v2 revision", r.revision, 4)
+check("v2 duration", r.durationSec, 169.692471655)
 
-// Byte for byte from a daemon playing a local file, which carries position and duration.
-const local = '{"ok":true,"state":"playing","track":{"title":"probe441","path":"/tmp/probe441.flac"},"position":16.873469387,"duration":600,"volume":-6.041199826559248,"total":1,"shuffle":false,"repeat":"Off","mono":false,"speed":1,"eq_preset":"Custom","eq_bands":[0,0,0,0,0,0,0,0,0,0]}'
+// The same snapshot arrives bare in a runtime.state event and inside a finished job.
+check("a bare snapshot parses the same", Model.parseSnapshot(JSON.parse(ncs).snapshot), r)
 
-const l = Model.parseStatus(local)
-check("local parses", l.ok, true)
-check("local title", l.title, "probe441")
-check("local is not a stream", l.isStream, false)
-check("local keeps the fractional dB", l.volumeDb, -6.041199826559248)
-check("local state", l.state, "playing")
-
-// Byte for byte from a real Navidrome track, tokens replaced. Note stream:true is set
-// for library tracks as well as radio, so it cannot be the seekability test.
-const nav = '{"ok":true,"state":"playing","track":{"title":"Billie (Loving Arms)","artist":"Fred again..","album":"Actual Life 2","genre":"Electronic","path":"https://music.example.com/rest/stream?c=cliamp&f=json&format=raw&id=rrH30XR3&s=SALT&t=TOKEN&u=USER&v=1.0.0","year":2021,"track_number":13,"duration_secs":217,"index":40,"stream":true},"position":37.49,"duration":217,"index":40,"total":44,"shuffle":false,"repeat":"Off"}'
-
-const n = Model.parseStatus(nav)
-check("navidrome parses", n.ok, true)
-check("navidrome title", n.title, "Billie (Loving Arms)")
-check("navidrome artist", n.artist, "Fred again..")
-check("navidrome album", n.album, "Actual Life 2")
-check("navidrome duration", n.durationSec, 217)
-check("navidrome position", n.positionSec, 37.49)
-check("navidrome is flagged a stream", n.isStream, true)
-check("navidrome queue depth", n.total, 44)
-
-// A library track has a duration, radio does not, which is the real seekability test.
-check("radio has no duration", Model.parseStatus(radio).durationSec, 0)
+// A Navidrome track, tokens replaced. Note stream:true is set for library tracks as well
+// as radio, so it cannot be the seekability test.
+const nav = Model.parseSnapshot({state: "playing", track: {title: "Billie (Loving Arms)", artist: "Gerry Mulligan", album: "Night Lights", path: "https://music.example.com/rest/stream?c=cliamp&f=json&format=raw&id=rrH30XR3&s=SALT&t=TOKEN&u=USER&v=1.0.0", stream: true}, position: 37.49, duration: 412, seekable: false, index: 3, total: 44, volume: -6.5})
+check("navidrome index", nav.index, 3)
+check("navidrome volume", nav.volumeDb, -6.5)
+check("navidrome cannot seek", nav.seekable, false)
 
 check("cover art is derived from the stream url",
-  Model.coverArtUrlFromStreamPath(n.path, 300),
+  Model.coverArtUrlFromStreamPath(nav.path, 300),
   "https://music.example.com/rest/getCoverArt?c=cliamp&id=rrH30XR3&s=SALT&t=TOKEN&u=USER&v=1.0.0&size=300")
 check("cover art needs a stream url", Model.coverArtUrlFromStreamPath("http://radio.example/stream", 300), "")
 check("cover art refuses plaintext", Model.coverArtUrlFromStreamPath("http://music.example.com/rest/stream?id=1&u=a&t=b&s=c", 300), "")
 check("cover art of a local file", Model.coverArtUrlFromStreamPath("/tmp/x.flac", 300), "")
 check("cover art of nothing", Model.coverArtUrlFromStreamPath("", 300), "")
 
-check("format=raw is not transcoded", Model.transcodedFromPath(n.path), false)
+check("format=raw is not transcoded", Model.transcodedFromPath(nav.path), false)
 check("a missing format=raw is transcoded",
   Model.transcodedFromPath("https://music.example.com/rest/stream?id=1&format=mp3"), true)
 check("a local file is not transcoded", Model.transcodedFromPath("/tmp/x.flac"), false)
 
-// A daemon with nothing loaded omits track entirely and reports index -1.
-const empty = Model.parseStatus('{"ok":true,"state":"stopped","volume":-30,"index":-1,"shuffle":false,"repeat":"Off","mono":false,"speed":1}')
+// A Spotify track carries its own cover, which the panel prefers.
+const sp = Model.parseSnapshot({state: "playing", track: {title: "Dance Monkey", path: "spotify:track:2XU0", album_art_url: "https://i.scdn.co/image/ab67", duration_secs: 209}})
+check("provider art is read", sp.artUrl, "https://i.scdn.co/image/ab67")
+check("the track duration fills a missing snapshot duration", sp.durationSec, 209)
+
+// Byte for byte from a Radio Browser station on 2.3.0: cliamp splits the ICY title.
+const live = Model.parseSnapshot({state: "playing", track: {title: "Adroit Jazz Underground on walmradio.com", artist: "Shabazi by Omer Avital", path: "https://icecast.walmradio.com:8443/jazz", index: 14, stream: true, stream_title: "Shabazi by Omer Avital - Adroit Jazz Underground on walmradio.com", station: "Adroit Jazz Underground", realtime: true}})
+check("a live station shows the song", live.title, "Shabazi by Omer Avital")
+check("and names the station under it", live.artist, "Adroit Jazz Underground")
+check("the index is read from the track when the snapshot omits it", live.index, 14)
+const unsplit = Model.parseSnapshot({state: "playing", track: {title: "Lofi", path: "https://radio.cliamp.stream/lofi/stream", stream: true, stream_title: "Artist - Song"}})
+check("an unsplit stream title is shown whole", unsplit.title, "Artist - Song")
+
+// Measured: a daemon with nothing loaded omits track, index and total.
+const empty = Model.parseStatus('{"version":2,"id":"c","ok":true,"snapshot":{"revision":1,"playlist_revision":0,"state":"stopped","seekable":false,"index":-1,"shuffle":false,"repeat":"Off","mono":false,"speed":1,"eq_preset":"Custom","eq_bands":[0,0,0,0,0,0,0,0,0,0],"visualizer":"Bars"}}')
 check("empty parses", empty.ok, true)
 check("empty title", empty.title, "")
-check("empty is not a stream", empty.isStream, false)
+check("empty index", empty.index, -1)
 check("empty total defaults to zero", empty.total, 0)
+
+// Measured on the old panel: a v1 request is refused, and that refusal is not a status.
+const refused = Model.parseStatus('{"version":2,"ok":false,"error":{"code":"invalid_version","message":"unsupported protocol version"}}')
+check("a refusal is not ok", refused.ok, false)
+check("a refusal says why in words, not [object Object]", refused.lastError, "unsupported protocol version")
 
 // cliamp exits 1 and prints this when no socket exists.
 const down = Model.parseStatus("cliamp is not running (no socket at /home/user/.config/cliamp/cliamp.sock)")
@@ -82,6 +88,7 @@ check("down records why", down.lastError.length > 0, true)
 
 check("empty input is not ok", Model.parseStatus("").ok, false)
 check("null input does not throw", Model.parseStatus(null).ok, false)
+check("a missing snapshot does not throw", Model.parseSnapshot(null).ok, false)
 
 // PipeWire publishes the stream rate as a period, so 1/44100 means 44100 Hz.
 check("node.rate parses", Model.rateFromNodeProps({ "node.rate": "1/44100" }), 44100)
@@ -157,23 +164,42 @@ check("searching for the scratch name still finds nothing",
   Model.matchPlaylists(saved, "cliampui"), [])
 check("no playlists is not an error", Model.matchPlaylists(null, "x"), [])
 
-// Byte for byte from the socket, the undocumented lyrics reply measured on the box.
+// The result of a succeeded lyrics job, measured on the box.
 const lyricsReply = '{"ok":true,"lyrics":[{"start":30.23,"text":"One more time"},{"start":33.5,"text":"Celebrate"},{"start":37,"text":"and dance so free"}]}'
+check("lyrics parse from the result object too", Model.parseLyrics(JSON.parse(lyricsReply)).length, 3)
 
-check("a lyrics reply is not mistaken for a status", Model.messageKind(lyricsReply), "lyrics")
-check("a status reply is a status", Model.messageKind(radio), "status")
-check("a history reply is neither", Model.messageKind('{"ok":true,"history":[]}'), "history")
-// Routing one of these to parseStatus blanked the track on every command.
-check("a bare acknowledgement is not a status", Model.messageKind('{"ok":true}'), "ack")
-check("an acknowledgement carrying a field is still not a status", Model.messageKind('{"ok":true,"shuffle":false}'), "ack")
-check("the no-lyrics error is routed as the lyrics reply it answers",
-  Model.messageKind('{"ok":false,"error":"no lyrics found"}'), "lyrics")
-check("any other command error is an acknowledgement",
-  Model.messageKind('{"ok":false,"error":"playlist not found"}'), "ack")
-check("an error that merely mentions lyrics is still an acknowledgement",
-  Model.messageKind('{"ok":false,"error":"playlist lyrics-2019 not found"}'), "ack")
-check("an error reply carrying a state is still a status",
-  Model.messageKind('{"ok":false,"state":"stopped","error":"x"}'), "status")
+// The two sockets: replies carry the request id, events carry the topic.
+check("a reply is routed by id", Model.messageKind('{"version":2,"id":"cliampui-1","ok":true,"job":{"id":"ab","state":"queued"}}'), "response")
+check("a refusal is still a reply", Model.messageKind('{"version":2,"id":"cliampui-2","ok":false,"error":{"code":"invalid_params"}}'), "response")
+check("an event is an event", Model.messageKind('{"event":"runtime.state","seq":1,"data":{"state":"stopped"}}'), "event")
+check("garbage is garbage", Model.messageKind("not json"), "garbage")
+check("an empty frame is nothing at all", Model.messageKind(""), "none")
+check("a whitespace frame is nothing at all", Model.messageKind("   \n"), "none")
+
+check("queued is not terminal", Model.jobTerminal({state: "queued"}), false)
+check("running is not terminal", Model.jobTerminal({state: "running"}), false)
+check("succeeded is terminal", Model.jobTerminal({state: "succeeded"}), true)
+check("failed is terminal", Model.jobTerminal({state: "failed"}), true)
+check("canceled is terminal", Model.jobTerminal({state: "canceled"}), true)
+
+// Byte for byte from 2.3.0: a followed Spotify playlist, and a track with no lyrics.
+const forbidden = {state: "failed", error: {code: "internal_error", message: "operation failed", detail: "spotify: list tracks: http status 403 Forbidden: {\"error\": {\"status\": 403, \"message\": \"Forbidden\" } }"}}
+check("a 403 from Spotify is explained",
+  Model.jobError(forbidden), "Spotify does not let cliamp read this playlist. It plays only playlists you own or collaborate on.")
+check("the detail is the useful half", Model.errorText({code: "internal_error", message: "operation failed", detail: "no lyrics found"}), "no lyrics found")
+check("a message without detail is used", Model.errorText({code: "invalid_params", message: "invalid parameters"}), "invalid parameters")
+check("a v1 string error is read", Model.errorText("playlist not found"), "playlist not found")
+check("no error is empty", Model.errorText(null), "")
+check("a succeeded job has no error", Model.jobError({state: "succeeded"}), "")
+check("a canceled job says so", Model.jobError({state: "canceled"}), "canceled")
+check("a missing job says so", Model.jobError(null), "no answer from cliamp")
+check("a 404 keeps its own words", Model.jobError({state: "failed", error: {detail: "spotify: list tracks: http status 404"}}), "spotify: list tracks: http status 404")
+check("a rate limit is explained", Model.friendlyError("http status 429"), "The provider is rate-limiting requests. Try again in a minute.")
+
+// Measured: loading the empty saved playlist "Favorites" succeeds and plays nothing.
+check("an empty load is noticed", Model.loadedNothing({state: "succeeded", snapshot: {state: "stopped"}}), true)
+check("a load with tracks is not", Model.loadedNothing({state: "succeeded", snapshot: {total: 14}}), false)
+check("a failed load is reported elsewhere", Model.loadedNothing({state: "failed"}), false)
 
 // `omarchy bar set <id> <key> true` stores the string, not the boolean, without --json.
 check("the string the bar CLI writes counts as true", Model.asBool("true", false), true)
@@ -182,17 +208,6 @@ check("a real boolean is passed through", Model.asBool(true, false), true)
 check("an unset setting takes the fallback", Model.asBool(undefined, true), true)
 check("anything else takes the fallback", Model.asBool("yes", false), false)
 
-check("a failed acknowledgement gives up its error",
-  Model.ackError('{"ok":false,"error":"playlist not found"}'), "playlist not found")
-check("a successful acknowledgement carries no error",
-  Model.ackError('{"ok":true}'), "")
-check("a garbage frame carries no error", Model.ackError("not json"), "")
-check("an empty frame carries no error", Model.ackError(""), "")
-check("garbage is not a status either", Model.messageKind("not json"), "ack")
-check("an empty frame is nothing at all", Model.messageKind(""), "none")
-check("a whitespace frame is nothing at all", Model.messageKind("   \n"), "none")
-check("a status is the reply that carries state", Model.messageKind('{"ok":true,"state":"playing"}'), "status")
-check("a stopped status is still a status", Model.messageKind('{"ok":false,"state":"stopped"}'), "status")
 check("a command error yields no lyrics", Model.parseLyrics('{"ok":false,"error":"no lyrics found"}'), [])
 
 check("the latency helper output parses", Model.latencyMs("167\n"), 167)
@@ -267,11 +282,11 @@ check("an honoured force reports bit-perfect",
   { ok: true, text: "FLAC 44.1 kHz · bit-perfect" })
 
 // cliamp calls an untouched EQ "Custom", so only the band values can be trusted.
-check("an untouched EQ is flat", Model.parseStatus(local).eqFlat, true)
+check("an untouched EQ is flat", Model.parseStatus(ncs).eqFlat, true)
 check("a raised band is not flat",
-  Model.parseStatus('{"ok":true,"state":"playing","eq_bands":[0,0,3,0,0,0,0,0,0,0]}').eqFlat, false)
+  Model.parseSnapshot({state: "playing", eq_bands: [0, 0, 3, 0, 0, 0, 0, 0, 0, 0]}).eqFlat, false)
 check("a missing eq is treated as flat",
-  Model.parseStatus('{"ok":true,"state":"playing"}').eqFlat, true)
+  Model.parseSnapshot({state: "playing"}).eqFlat, true)
 
 check("EQ breaks it even when rates and gain are right",
   Model.verdict({ streamRate: 44100, sinkRate: 44100, unityGain: true, eqFlat: false, transcoded: false, codec: "FLAC" }),
@@ -324,6 +339,91 @@ check("non-numeric is zero", Model.formatTime("x"), "0:00")
 check("error whitespace collapses", Model.elideError("a\n\n  b"), "a b")
 check("long error is cut", Model.elideError("x".repeat(300)).length, Model.MAX_ERROR_CHARS)
 check("empty error stays empty", Model.elideError(""), "")
+
+// provider.list, byte for byte from 2.3.0.
+const providers = Model.parseProviders({ok: true, providers: [{key: "cliamp", name: "cliamp radio", searchable: false}, {key: "radio", name: "Radio", searchable: true, catalog: true}, {key: "local", name: "Local", searchable: true}, {key: "spotify", name: "Spotify", searchable: true}, {name: "no key"}]})
+check("providers parse, keyless rows dropped", providers.map(p => p.key), ["cliamp", "radio", "local", "spotify"])
+check("searchable is read", providers[1].searchable, true)
+check("catalog is read", providers[1].catalog, true)
+check("provider lookup", Model.providerByKey(providers, "spotify").name, "Spotify")
+check("an unknown provider is null", Model.providerByKey(providers, "tidal"), null)
+check("a job result string parses too", Model.parseProviders('{"providers":[{"key":"radio"}]}').length, 1)
+check("garbage gives no providers", Model.parseProviders("nope"), [])
+
+// cliamp radio channels have stable ids on 2.3.0. The old station list gave EDM and NCS
+// the same id, "cliamp:", so a click on NCS played EDM.
+const channels = Model.parseSourceRows({ok: true, total: 3, playlists: [{id: "edm", name: "EDM", provider: "cliamp", track_count: 100}, {id: "ncs", name: "NCS", provider: "cliamp", track_count: 48}, {id: "ncs", name: "NCS again", provider: "cliamp"}]}, "cliamp")
+check("channel rows", channels.rows.map(r => r.id), ["edm", "ncs"])
+check("a duplicate id is listed once", channels.rows.length, 2)
+check("a channel shows its size", Model.rowDetail(channels.rows[1]), "48 tracks")
+
+const status = Model.parseStatus(ncs)
+check("the playing channel is found by the snapshot playlist", Model.activeRowIndex(channels.rows, status), 1)
+check("EDM is not marked when NCS plays", Model.rowIsActive(channels.rows[0], status), false)
+check("an empty loaded playlist is not marked", Model.rowIsActive({kind: "playlist", provider: "local", id: "Favorites"}, {playlist: "local:Favorites", total: 0}), false)
+check("a station played on its own unmarks the playlist", Model.rowIsActive(channels.rows[1], status, status.path), false)
+check("playlist ref splits at the first colon", Model.playlistRef("spotify:spotify:album:4eL"), {provider: "spotify", id: "spotify:album:4eL"})
+check("an empty ref", Model.playlistRef(""), {provider: "", id: ""})
+
+// Spotify, as 2.3.0 lists it for this account: followed playlists always answer 403.
+const spotify = Model.parseSourceRows({ok: true, playlists: [
+  {id: "YOUR MUSIC", name: "Your Music", provider: "spotify", section: "Library", track_count: 274},
+  {id: "0Gw2", name: "Logan's Dance Mix", provider: "spotify", section: "Your playlists", track_count: 18},
+  {id: "23hD", name: "ROCK/GYM PUMP", provider: "spotify", section: "Followed playlists", track_count: 50},
+  {id: "spotify:album:7q2B", name: "Dr. Dre - 2001", provider: "spotify", section: "Saved albums", track_count: 23}]}, "spotify")
+check("followed playlists are not listed", spotify.rows.map(r => r.id), ["YOUR MUSIC", "0Gw2", "spotify:album:7q2B"])
+check("and they are counted", spotify.hidden, 1)
+check("the note explains them", Model.hiddenNote("spotify", 34), "34 followed playlists are hidden. Spotify does not let cliamp read playlists you do not own.")
+check("no note without hidden rows", Model.hiddenNote("spotify", 0), "")
+check("a section is the row detail", Model.rowDetail(spotify.rows[0]), "Library")
+
+// Radio's catalog carries "Use my location", which asks a question the panel cannot.
+const radio = Model.parseSourceRows({ok: true, playlists: [{id: "loc:ask", name: "Use my location", provider: "radio"}, {id: "l:0", name: "cliamp radio", provider: "radio"}, {id: "c:0", name: "MANGORADIO [128k] · Germany", provider: "radio", favoritable: true}]}, "radio")
+check("the location prompt is skipped", radio.rows.map(r => r.id), ["l:0", "c:0"])
+
+// provider.search on 2.3.0: Spotify answers albums, Radio stations, Podcasts feeds.
+const albums = Model.parseSearchRows({ok: true, tracks: [{title: "DAMN.", artist: "Kendrick Lamar", album: "DAMN.", path: "spotify:album:4eLPsYPBmXABThSJ821sqY", year: 2017, provider_meta: {albumID: "4eLPsYPBmXABThSJ821sqY", kind: "album"}}]}, "spotify")
+check("a Spotify album row", [albums[0].kind, albums[0].name, albums[0].section], ["album", "DAMN.", "Kendrick Lamar"])
+// Measured: provider.load with the bare id answers 404, and with the full path it plays.
+check("an album loads by its full path, not the stripped id", Model.playRequest(albums[0]),
+  {operation: "provider.load", params: {provider: "spotify", playlist: "spotify:album:4eLPsYPBmXABThSJ821sqY"}})
+
+const stations = Model.parseSearchRows({ok: true, tracks: [{title: "Adroit Jazz Underground", path: "https://icecast.walmradio.com:8443/jazz", stream: true, realtime: true, provider_meta: {"radio.country": "The United States Of America"}}]}, "radio")
+check("a radio result is a station", stations[0].kind, "station")
+check("a station names its country", stations[0].section, "The United States Of America")
+const stationPlay = Model.playRequest(stations[0])
+check("a station plays as supplied", stationPlay.operation, "track.play")
+check("with its provider identity intact", stationPlay.params.track.provider_meta["radio.country"], "The United States Of America")
+check("a station played on its own is marked by path",
+  Model.rowIsActive(stations[0], {path: "https://icecast.walmradio.com:8443/jazz"}), true)
+
+const feeds = Model.parseSearchRows({ok: true, tracks: [{title: "The Rest Is History", artist: "Goalhanger", path: "https://feeds.megaphone.fm/GLT4787413333", stream: true, feed: true, provider_meta: {albumID: "https://feeds.megaphone.fm/GLT4787413333", kind: "album"}}]}, "podcast")
+check("a podcast result is a feed", feeds[0].kind, "podcast")
+check("a feed loads by its url", Model.playRequest(feeds[0]).params.playlist, "https://feeds.megaphone.fm/GLT4787413333")
+check("a pathless result is dropped", Model.parseSearchRows({tracks: [{title: "x"}]}, "spotify"), [])
+check("no result is no rows", Model.parseSearchRows(null, "spotify"), [])
+check("a playlist row loads through the provider", Model.playRequest(channels.rows[0]),
+  {operation: "provider.load", params: {provider: "cliamp", playlist: "edm"}})
+check("row keys differ by provider and kind", Model.rowKey(channels.rows[0]) !== Model.rowKey(albums[0]), true)
+
+// Channel up and down.
+check("next from the middle", Model.adjacentRowIndex(5, 2, 1), 3)
+check("previous from the middle", Model.adjacentRowIndex(5, 2, -1), 1)
+check("next wraps at the end", Model.adjacentRowIndex(5, 4, 1), 0)
+check("previous wraps at the start", Model.adjacentRowIndex(5, 0, -1), 4)
+check("nothing playing, next starts at the top", Model.adjacentRowIndex(5, -1, 1), 0)
+check("nothing playing, previous starts at the bottom", Model.adjacentRowIndex(5, -1, -1), 4)
+check("an empty list has nowhere to go", Model.adjacentRowIndex(0, -1, 1), -1)
+
+// The filter matches the name and the section.
+check("filter on name", Model.filterRows(spotify.rows, "dance").map(r => r.id), ["0Gw2"])
+check("filter on section", Model.filterRows(spotify.rows, "saved").map(r => r.id), ["spotify:album:7q2B"])
+check("filter is case blind", Model.filterRows(channels.rows, "NCS").length, 1)
+check("an empty filter keeps every row", Model.filterRows(channels.rows, "  ").length, 2)
+check("a missing list filters to nothing", Model.filterRows(null, "x"), [])
+
+check("the scratch playlist is not the recently played list",
+  Model.RECENTLY_PLAYED !== "cliampui" && Model.RECENTLY_PLAYED === "Recently Played", true)
 
 console.log(failures === 0 ? "all model tests passed" : failures + " failing")
 if (failures > 0) Deno.exit(1)

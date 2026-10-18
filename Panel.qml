@@ -120,10 +120,9 @@ Panel {
         }
       }
     }
-    // Both buttons open the panel. Quit and restart live in the panel footer.
-    // A separate popup failed to load (Popup.dim is final) and took the widget down.
     onPressed: function (buttonCode) {
-      root.toggle()
+      if (buttonCode === Qt.RightButton) cliamp.playPause()
+      else root.toggle()
     }
   }
 

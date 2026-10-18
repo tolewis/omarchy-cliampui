@@ -137,7 +137,7 @@ Panel {
       anchors.fill: parent
       // Every letter is forwarded to a focused editor as well as to onTextKey, so a
       // search for a track name would otherwise skip tracks and launch a terminal.
-      blocked: library.searchFocused
+      blocked: library.searchFocused || sources.searchFocused
 
       onMoveRequested: function (dx, dy) {
         if ((root.sheetOpen || root.libraryOpen) && dy !== 0) { root.moveCursor(dy); return }
@@ -155,6 +155,9 @@ Panel {
         if (key === "o") { root.sheetOpen = !root.sheetOpen; root.libraryOpen = false; root.cursorIndex = 0 }
         else if (key === "/") { root.libraryOpen = !root.libraryOpen; root.sheetOpen = false; root.cursorIndex = 0 }
         else if (key === "f") cliamp.openPlayer()
+        // Channel up and down: load the source row above or below the one playing.
+        else if (key === "]") cliamp.stepSource(1)
+        else if (key === "[") cliamp.stepSource(-1)
         else if (!cliamp.running) return
         else if (key === "n") cliamp.next()
         else if (key === "b") cliamp.previous()
@@ -197,7 +200,8 @@ Panel {
             fontFamily: root.fontFamily
           }
 
-          Stations {
+          Sources {
+            id: sources
             width: parent.width
             service: cliamp
             foreground: root.foreground

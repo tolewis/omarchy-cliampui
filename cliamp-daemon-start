@@ -10,11 +10,6 @@
 
 set -uo pipefail
 
-# The fork binary lands in ~/.local/bin when installed; prefer it.
-if [[ -z ${CLIAMP_BIN:-} && -x $HOME/.local/bin/cliamp ]]; then
-  CLIAMP_BIN="$HOME/.local/bin/cliamp"
-fi
-
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/cliampui"
 rate_file="$state_dir/sample-rate"
 
@@ -26,7 +21,7 @@ if [[ -r $rate_file ]]; then
 fi
 
 if [[ -n $rate && $rate -gt 0 ]]; then
-  exec "${CLIAMP_BIN:-/usr/bin/cliamp}" --daemon --sample-rate "$rate"
+  exec /usr/bin/cliamp --daemon --sample-rate "$rate"
 fi
 
-exec "${CLIAMP_BIN:-/usr/bin/cliamp}" --daemon
+exec /usr/bin/cliamp --daemon

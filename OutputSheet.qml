@@ -188,55 +188,7 @@ Column {
     }
   }
 
-  // The provider the daemon resolves library tracks through, and whether it is
-  // authorised. Clicking the line runs the switch. Hidden while the daemon reports
-  // no providers, which is also the answer an unpatched cliamp gives.
-  CursorSurface {
-    width: parent.width
-    foreground: root.foreground
-    visible: !!(root.service && root.service.providerSummary.length > 0)
-    implicitHeight: providerLabel.implicitHeight + Style.spacing.rowPaddingX
-
-    MouseArea {
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onClicked: root.service.cycleProvider()
-    }
-  
-    RowLayout {
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      anchors.leftMargin: Style.space(10)
-      anchors.rightMargin: Style.space(10)
-      spacing: Style.space(8)
-
-      Text {
-        id: providerLabel
-        textFormat: Text.PlainText
-        Layout.fillWidth: true
-        text: root.service ? root.service.providerSummary : ""
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        elide: Text.ElideRight
-      }
-
-      Text {
-        textFormat: Text.PlainText
-        text: "Switch"
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        font.underline: true
-      }
-    }
-  }
-
-  // One chip per provider: the name, underlined while active. A click switches
-  // to that provider directly, no cycling past the ones in between. Hidden
-  // entirely when the daemon reports no providers.
+  // The headless daemon has no other control in the bar, so it lives here.
   Row {
     spacing: Style.space(14)
     Text {
@@ -273,33 +225,6 @@ Column {
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor
         onClicked: if (root.service) root.service.quitDaemon()
-      }
-    }
-  }
-
-  Flow {
-    width: parent.width
-    spacing: Style.space(10)
-    visible: !!(root.service && root.service.providers && root.service.providers.length > 0)
-
-    Repeater {
-      model: root.service ? (root.service.providers || []) : []
-
-      Text {
-        required property var modelData
-        textFormat: Text.PlainText
-        text: (modelData && modelData.key ? modelData.key : "") + (modelData && modelData.authed === false ? " (sign in)" : "")
-        color: modelData && modelData.active === true ? root.foreground : root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        font.underline: modelData && modelData.active === true
-
-        MouseArea {
-          anchors.fill: parent
-          hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          onClicked: if (root.service) root.service.switchProvider(String(parent.modelData ? parent.modelData.key : ""))
-        }
       }
     }
   }

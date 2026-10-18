@@ -13,10 +13,12 @@ function defaultStatus() {
     title: "",
     path: "",
     isStream: false,
+    seekable: false,
     durationSec: 0,
     positionSec: 0,
     artist: "",
     album: "",
+    artUrl: "",
     volumeDb: 0,
     total: 0,
     index: -1,
@@ -24,61 +26,162 @@ function defaultStatus() {
     repeat: "Off",
     visualizer: "",
     eqFlat: true,
+    playlist: "",
+    streamError: "",
+    revision: 0,
     lastError: ""
   }
 }
 
-// Sample input, from a running instance:
-// {"ok":true,"state":"playing","track":{"title":"probe441","path":"/tmp/probe441.flac"},
-//  "position":16.87,"duration":600,"volume":-6.04,"total":1,"shuffle":false,"repeat":"Off",...}
-// A radio entry adds "stream":true inside track. When no socket exists cliamp exits 1
-// and prints a plain sentence instead of JSON.
-function parseStatus(raw) {
-  var out = defaultStatus()
-  var text = String(raw || "").trim()
-  if (text.length === 0) {
-    out.lastError = "cliamp returned nothing"
-    return out
-  }
+// ---- version 2 IPC ----
 
+// cliamp 2 speaks only version 2 on its socket. A v1 {"cmd":...} packet is refused with
+// invalid_version, which is what left the panel showing nothing.
+var IPC_VERSION = 2
+
+// Every v2 line is one JSON object. Anything else, including the plain sentence cliamp
+// prints when it is not running, parses to null.
+function parseObject(raw) {
+  var text = String(raw || "").trim()
+  if (text.length === 0) return null
   var data = null
   try {
     data = JSON.parse(text)
   } catch (e) {
-    out.lastError = elideError(text)
+    return null
+  }
+  return data && typeof data === "object" ? data : null
+}
+
+// Sample input: {"code":"internal_error","message":"operation failed","detail":"no lyrics found"}
+// The detail is the provider's own diagnostic, so it is the useful half when present.
+// A v1 refusal carried the sentence in "error" directly, so both shapes are read.
+function errorText(error) {
+  if (error === undefined || error === null) return ""
+  if (typeof error === "string") return error
+  if (typeof error !== "object") return String(error)
+  var detail = String(error.detail || "")
+  if (detail.length > 0) return detail
+  return String(error.message || error.code || "")
+}
+
+// A line on the command socket answers a request and carries its id. A line on the
+// event socket carries "event". Nothing else is routed.
+function messageKind(raw) {
+  var data = parseObject(raw)
+  if (data === null) return String(raw || "").trim().length === 0 ? "none" : "garbage"
+  if (typeof data.event === "string") return "event"
+  if (data.id !== undefined) return "response"
+  return "garbage"
+}
+
+var TERMINAL_JOB_STATES = ["succeeded", "failed", "canceled"]
+
+function jobTerminal(job) {
+  var state = String(job && job.state || "")
+  return TERMINAL_JOB_STATES.indexOf(state) >= 0
+}
+
+// The sentence a person reads when an action fails. Measured on 2.3.0: Spotify answers a
+// playlist the account follows but does not own with 403, and a shared client id with 429.
+function friendlyError(text) {
+  var t = String(text || "")
+  if (t.length === 0) return ""
+  if (t.indexOf("403") >= 0 && t.toLowerCase().indexOf("spotify") >= 0)
+    return "Spotify does not let cliamp read this playlist. It plays only playlists you own or collaborate on."
+  if (t.indexOf("429") >= 0 || t.toLowerCase().indexOf("rate-limit") >= 0 || t.toLowerCase().indexOf("rate limit") >= 0)
+    return "The provider is rate-limiting requests. Try again in a minute."
+  if (t.indexOf("not authenticated") >= 0 || t.indexOf("sign in") >= 0)
+    return "Sign in to this provider in the cliamp TUI first."
+  return elideError(t.replace(/^operation failed \((.*)\)$/, "$1"))
+}
+
+// The reason a job failed, for the panel. Empty for a job that succeeded.
+function jobError(job) {
+  if (!job || typeof job !== "object") return "no answer from cliamp"
+  if (job.state === "succeeded") return ""
+  if (job.state === "canceled") return "canceled"
+  return friendlyError(errorText(job.error) || "operation failed")
+}
+
+// Sample input, the snapshot from state.get, a runtime.state event, or a finished job:
+// {"revision":4,"playlist_revision":3,"state":"playing","track":{"title":"BE THERE WITH U",
+//  "artist":"2frers","path":"https://radio.cliamp.stream/ncs/tracks/b90…","stream":true},
+//  "position":1.99,"duration":169.69,"seekable":true,"playlist":"cliamp:ncs","total":48,
+//  "shuffle":false,"repeat":"Off","eq_bands":[0,0,0,0,0,0,0,0,0,0],"visualizer":"Bars"}
+// cliamp omits zero values, so a missing index with a track present is index 0 and a
+// missing volume is 0 dB.
+function parseSnapshot(snapshot) {
+  var out = defaultStatus()
+  if (!snapshot || typeof snapshot !== "object") {
+    out.lastError = "cliamp sent no state"
     return out
   }
-  if (!data || typeof data !== "object") {
-    out.lastError = elideError(text)
-    return out
-  }
+  out.ok = true
+  out.state = String(snapshot.state || "stopped")
+  out.revision = numberOr(snapshot.revision, 0)
+  out.volumeDb = numberOr(snapshot.volume, 0)
+  out.total = numberOr(snapshot.total, 0)
+  out.shuffle = snapshot.shuffle === true
+  out.repeat = String(snapshot.repeat || "Off")
+  out.visualizer = String(snapshot.visualizer || "")
+  out.eqFlat = bandsAreFlat(snapshot.eq_bands)
+  out.seekable = snapshot.seekable === true
+  out.playlist = String(snapshot.playlist || "")
+  out.streamError = String(snapshot.stream_error || "")
+  out.durationSec = numberOr(snapshot.duration, 0)
+  out.positionSec = numberOr(snapshot.position, 0)
 
-  out.ok = data.ok === true
-  if (!out.ok) {
-    out.lastError = elideError(String(data.error || text))
-    return out
-  }
-
-  out.state = String(data.state || "stopped")
-  out.volumeDb = numberOr(data.volume, 0)
-  out.total = numberOr(data.total, 0)
-  out.index = numberOr(data.index, -1)
-  out.shuffle = data.shuffle === true
-  out.repeat = String(data.repeat || "Off")
-  out.visualizer = String(data.visualizer || "")
-  out.eqFlat = bandsAreFlat(data.eq_bands)
-
-  out.durationSec = numberOr(data.duration, 0)
-  out.positionSec = numberOr(data.position, 0)
-
-  var track = data.track
+  var track = snapshot.track
   if (track && typeof track === "object") {
-    out.title = String(track.title || "")
-    out.path = String(track.path || "")
+    out.index = numberOr(snapshot.index, 0)
+    // A live station names the song in stream_title and itself in title.
+    var streamTitle = String(track.stream_title || "")
+    out.title = streamTitle.length > 0 ? streamTitle : String(track.title || "")
     out.artist = String(track.artist || "")
+    if (streamTitle.length > 0 && out.artist.length === 0) out.artist = String(track.station || track.title || "")
     out.album = String(track.album || "")
+    out.path = String(track.path || "")
     out.isStream = track.stream === true
+    out.artUrl = String(track.album_art_url || "")
     if (out.durationSec <= 0) out.durationSec = numberOr(track.duration_secs, 0)
+  }
+  return out
+}
+
+// Sample input, the reply to method "state.get":
+// {"version":2,"id":"cliampui-1","ok":true,"snapshot":{…}}
+// A refusal carries {"ok":false,"error":{…}} instead, and a daemon that is down answers
+// nothing at all.
+function parseStatus(raw) {
+  var data = parseObject(raw)
+  var text = String(raw || "").trim()
+  if (data === null) {
+    var none = defaultStatus()
+    none.lastError = text.length === 0 ? "cliamp returned nothing" : elideError(text)
+    return none
+  }
+  if (data.ok !== true || !data.snapshot || typeof data.snapshot !== "object") {
+    var refused = defaultStatus()
+    refused.lastError = elideError(errorText(data.error) || text)
+    return refused
+  }
+  return parseSnapshot(data.snapshot)
+}
+
+// Sample input, the "result" of a succeeded lyrics job, measured on the box:
+// {"ok":true,"lyrics":[{"start":30.23,"text":"One more time"}]}
+// A track with no lyrics fails the job instead, so there is no result to parse.
+function parseLyrics(result) {
+  var out = []
+  var data = typeof result === "string" ? parseObject(result) : result
+  if (!data || typeof data !== "object" || !data.lyrics || data.lyrics.length === undefined) return out
+  for (var i = 0; i < data.lyrics.length; i++) {
+    var line = data.lyrics[i]
+    if (!line) continue
+    var body = String(line.text || "")
+    if (body.length === 0) continue
+    out.push({ start: numberOr(line.start, 0), text: body })
   }
   return out
 }
@@ -232,65 +335,6 @@ function asBool(value, fallback) {
   return fallback
 }
 
-// The exact answer cliamp gives for a track it found no lyrics for, measured on the box.
-var NO_LYRICS_ERROR = "no lyrics found"
-
-// Sample input: {"ok":true,"state":"playing",..} {"ok":true,"lyrics":[..]} {"ok":true,"history":[..]} {"ok":true}
-// Only a status carries state; parsing an ack as one blanks the track.
-function messageKind(raw) {
-  var text = String(raw || "").trim()
-  if (text.length === 0) return "none"
-  var data = null
-  try {
-    data = JSON.parse(text)
-  } catch (e) {
-    return "ack"
-  }
-  if (!data || typeof data !== "object") return "ack"
-  if (data.lyrics !== undefined) return "lyrics"
-  // Matched whole: a command error that merely names a file cannot be swallowed as this.
-  if (data.ok === false && String(data.error || "") === NO_LYRICS_ERROR) return "lyrics"
-  if (data.history !== undefined) return "history"
-  if (data.state !== undefined) return "status"
-  return "ack"
-}
-
-// Sample input, a command reply that failed: {"ok":false,"error":"playlist not found"}
-function ackError(raw) {
-  var data = null
-  try {
-    data = JSON.parse(String(raw || "").trim())
-  } catch (e) {
-    return ""
-  }
-  if (!data || typeof data !== "object" || data.ok !== false) return ""
-  return String(data.error || "")
-}
-
-// Sample input, the reply to {"cmd":"lyrics"}, measured on the box:
-// {"ok":true,"lyrics":[{"start":30.23,"text":"One more time"}]}
-// A track with no lyrics answers {"ok":false,"error":"no lyrics found"} instead.
-function parseLyrics(raw) {
-  var out = []
-  var text = String(raw || "").trim()
-  if (text.length === 0) return out
-  var data = null
-  try {
-    data = JSON.parse(text)
-  } catch (e) {
-    return out
-  }
-  if (!data || data.ok !== true || !data.lyrics || data.lyrics.length === undefined) return out
-  for (var i = 0; i < data.lyrics.length; i++) {
-    var line = data.lyrics[i]
-    if (!line) continue
-    var body = String(line.text || "")
-    if (body.length === 0) continue
-    out.push({ start: numberOr(line.start, 0), text: body })
-  }
-  return out
-}
-
 // Sample input, one integer of milliseconds from cliamp-output-latency: 167, or 0.
 function latencyMs(raw) {
   var value = parseInt(String(raw || "").trim(), 10)
@@ -397,190 +441,225 @@ function matchPlaylists(playlists, query) {
   return out
 }
 
-// ---- radio stations and providers ----
+// ---- sources: providers, their playlists and stations, and search ----
 
-// A playlist cliamp rebuilds itself, not one the user saved. Its first entry is the
-// most recently played track, so the row in the panel replays that track instead of
-// loading the list as a queue.
+// A playlist cliamp rebuilds itself, not one the user saved. Loading it starts its first
+// entry, which is the most recently played track.
 var RECENTLY_PLAYED = "Recently Played"
 
-// Sample input, the result of `cliamp station list`:
-// {"stations":[{"id":"radio:lofi","name":"Lofi","url":"https://radio.example/lofi","provider":"radio"}]}
-// A row without an id or a url cannot be played back, so it is dropped. Anything that
-// is not this shape (an error line, an ok wrapper) still parses when it can, and
-// garbage yields an empty list, which is what hides the section in the panel.
-function parseStations(raw) {
+// Measured on 2.3.0 with a Spotify developer client: every playlist in this section
+// answers 403, because Spotify lets an app read only playlists the account owns or
+// collaborates on. Listing them gave the panel rows that could never play.
+var BLOCKED_SECTIONS = { spotify: ["Followed playlists"] }
+
+// Rows the TUI drives interactively and a panel cannot: "Use my location" asks a
+// question first.
+var INTERACTIVE_IDS = { radio: ["loc:ask"] }
+
+// Sample input, the result of provider.list on 2.3.0:
+// {"ok":true,"providers":[{"key":"cliamp","name":"cliamp radio","searchable":false},
+//  {"key":"radio","name":"Radio","searchable":true,"catalog":true}, …]}
+// The daemon has no active provider. The panel picks one for browsing only.
+function parseProviders(result) {
   var out = []
-  var text = String(raw || "").trim()
-  if (text.length === 0) return out
-  var data = null
-  try {
-    data = JSON.parse(text)
-  } catch (e) {
-    return out
-  }
-  var list = null
-  if (data && typeof data === "object" && data.stations && data.stations.length !== undefined) list = data.stations
-  else if (data && typeof data === "object" && data.length !== undefined) list = data
+  var data = typeof result === "string" ? parseObject(result) : result
+  var list = data && data.providers
   if (!list || list.length === undefined) return out
   for (var i = 0; i < list.length; i++) {
-    var s = list[i]
-    if (!s || typeof s !== "object") continue
-    var id = String(s.id || "")
-    var url = String(s.url || "")
-    if (id.length === 0 || url.length === 0) continue
+    var p = list[i]
+    if (!p || typeof p !== "object") continue
+    var key = String(p.key || "")
+    if (key.length === 0) continue
     out.push({
-      id: id,
-      name: String(s.name || ""),
-      url: url,
-      provider: String(s.provider || "")
+      key: key,
+      name: String(p.name || key),
+      searchable: p.searchable === true,
+      catalog: p.catalog === true
     })
   }
   return out
 }
 
-// The row the daemon is actually playing. status.track.path is the stream url of a
-// station and station.list is in queue order, so an exact url match finds the row.
-function stationActiveIndex(stations, path) {
-  var wanted = String(path || "")
-  if (wanted.length === 0) return -1
-  var list = stations && stations.length !== undefined ? stations : []
+function providerByKey(providers, key) {
+  var list = providers && providers.length !== undefined ? providers : []
   for (var i = 0; i < list.length; i++) {
-    if (String(list[i] && list[i].url || "") === wanted) return i
+    if (list[i] && list[i].key === key) return list[i]
+  }
+  return null
+}
+
+// The provider half of the snapshot's "playlist" field: "cliamp:ncs" is the cliamp radio
+// channel ncs, and "spotify:spotify:album:4eL…" is a Spotify album. Split at the first colon.
+function playlistRef(value) {
+  var text = String(value || "")
+  var cut = text.indexOf(":")
+  if (cut <= 0) return { provider: "", id: "" }
+  return { provider: text.slice(0, cut), id: text.slice(cut + 1) }
+}
+
+function rowKey(row) {
+  if (!row) return ""
+  return String(row.provider || "") + "|" + String(row.kind || "") + "|" + String(row.id || "")
+}
+
+function listOf(container, field) {
+  var data = typeof container === "string" ? parseObject(container) : container
+  var list = data && data[field]
+  return list && list.length !== undefined ? list : []
+}
+
+// Sample input, the result of provider.playlists or provider.catalog:
+// {"ok":true,"total":15,"playlists":[{"id":"ncs","name":"NCS","provider":"cliamp","track_count":48},
+//  {"id":"23hD5…","name":"ROCK/GYM PUMP","provider":"spotify","section":"Followed playlists"}]}
+// Returns { rows, hidden }: hidden counts the rows dropped because they cannot play.
+function parseSourceRows(result, providerKey) {
+  var rows = []
+  var hidden = 0
+  var list = listOf(result, "playlists")
+  var key = String(providerKey || "")
+  var blocked = BLOCKED_SECTIONS[key] || []
+  var interactive = INTERACTIVE_IDS[key] || []
+  var seen = {}
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i]
+    if (!p || typeof p !== "object") continue
+    var id = String(p.id || "")
+    if (id.length === 0 || interactive.indexOf(id) >= 0) continue
+    var section = String(p.section || "")
+    if (blocked.indexOf(section) >= 0) { hidden++; continue }
+    var provider = String(p.provider || key)
+    var row = {
+      kind: "playlist",
+      provider: provider,
+      id: id,
+      name: String(p.name || id),
+      section: section,
+      count: numberOr(p.track_count, 0)
+    }
+    // Two rows with one id would play the same thing and both light up as active.
+    var k = rowKey(row)
+    if (seen[k]) continue
+    seen[k] = true
+    rows.push(row)
+  }
+  return { rows: rows, hidden: hidden }
+}
+
+// Sample input, the result of provider.search on 2.3.0. Spotify answers albums, Radio
+// answers stations, Podcasts answers feeds:
+// {"ok":true,"tracks":[{"title":"DAMN.","artist":"Kendrick Lamar","path":"spotify:album:4eL…",
+//   "provider_meta":{"albumID":"4eL…","kind":"album"}},
+//  {"title":"Adroit Jazz Underground","path":"https://icecast…/jazz","stream":true,"realtime":true}]}
+// An album or a feed loads as a playlist under its full path, which is the id that
+// provider.load accepts. Stripping "spotify:album:" made the daemon answer 404.
+function parseSearchRows(result, providerKey) {
+  var rows = []
+  var list = listOf(result, "tracks")
+  var key = String(providerKey || "")
+  for (var i = 0; i < list.length; i++) {
+    var t = list[i]
+    if (!t || typeof t !== "object") continue
+    var path = String(t.path || "")
+    if (path.length === 0) continue
+    var meta = t.provider_meta && typeof t.provider_meta === "object" ? t.provider_meta : {}
+    var kind = "track"
+    if (String(meta.kind || "") === "album") kind = t.feed === true ? "podcast" : "album"
+    else if (t.stream === true && t.realtime === true) kind = "station"
+    var sub = String(t.artist || "")
+    if (sub.length === 0 && kind === "station") sub = String(meta["radio.country"] || "")
+    rows.push({
+      kind: kind,
+      provider: key,
+      id: path,
+      name: String(t.title || path),
+      section: sub,
+      count: 0,
+      track: t
+    })
+  }
+  return rows
+}
+
+// How a row is played. Playlists, albums and feeds replace the queue through
+// provider.load. A single track or station is played as supplied, which keeps its
+// provider identity.
+function playRequest(row) {
+  if (!row) return null
+  if (row.kind === "track" || row.kind === "station") {
+    return { operation: "track.play", params: { track: row.track || { path: String(row.id || ""), title: String(row.name || "") } } }
+  }
+  return { operation: "provider.load", params: { provider: String(row.provider || ""), playlist: String(row.id || "") } }
+}
+
+// The row the daemon is playing. The snapshot names the loaded playlist; a track played
+// on its own is matched on its path.
+// A load that succeeded into an empty queue. Measured: loading the empty saved playlist
+// "Favorites" succeeds, and nothing plays, so the panel says why.
+function loadedNothing(job) {
+  if (!job || job.state !== "succeeded" || !job.snapshot) return false
+  return numberOr(job.snapshot.total, 0) === 0
+}
+
+function rowIsActive(row, status) {
+  if (!row || !status) return false
+  if (row.kind === "track" || row.kind === "station") {
+    return String(status.path || "").length > 0 && String(status.path) === String(row.id || "")
+  }
+  var ref = playlistRef(status.playlist)
+  return ref.provider === String(row.provider || "") && ref.id === String(row.id || "")
+}
+
+function activeRowIndex(rows, status) {
+  var list = rows && rows.length !== undefined ? rows : []
+  for (var i = 0; i < list.length; i++) {
+    if (rowIsActive(list[i], status)) return i
   }
   return -1
 }
 
-// The station filter runs in the panel, client-side, so a daemon without any
-// search op still answers it. The query is a case-insensitive substring of the
-// station's name or artist; an empty query keeps every row.
-function filterStations(stations, query) {
-  var list = stations && stations.length !== undefined ? stations : []
+// Channel up and down: the row next to the one playing, wrapping at the ends. With
+// nothing of this list playing, the first step lands on the first or the last row.
+function adjacentRowIndex(count, activeIndex, delta) {
+  var n = numberOr(count, 0)
+  if (n <= 0) return -1
+  var step = delta < 0 ? -1 : 1
+  if (activeIndex < 0 || activeIndex >= n) return step > 0 ? 0 : n - 1
+  return (activeIndex + step + n) % n
+}
+
+// The filter runs in the panel on name and section, so a provider that cannot search
+// still answers it. An empty query keeps every row.
+function filterRows(rows, query) {
+  var list = rows && rows.length !== undefined ? rows : []
   var wanted = String(query || "").trim().toLowerCase()
   if (wanted.length === 0) return list
   var out = []
   for (var i = 0; i < list.length; i++) {
     var s = list[i]
     if (!s || typeof s !== "object") continue
-    var hay = (String(s.name || "") + " " + String(s.artist || "")).toLowerCase()
+    var hay = (String(s.name || "") + " " + String(s.section || "")).toLowerCase()
     if (hay.indexOf(wanted) !== -1) out.push(s)
   }
   return out
 }
 
-// Sample input, the result of `cliamp remote call provider.list`:
-// {"providers":[{"key":"navidrome","name":"Navidrome","authed":true},
-//  {"key":"radio","name":"Radio","authed":true,"active":true}]}
-// The call travels through the daemon's remote passthrough, so the list is looked for
-// inside an envelope as well as at the top. A row without a key cannot be switched,
-// so it is dropped, and nothing parseable hides the footer line in the panel.
-function parseProviders(raw) {
-  var out = []
-  var text = String(raw || "").trim()
-  if (text.length === 0) return out
-  var data = null
-  try {
-    data = JSON.parse(text)
-  } catch (e) {
-    return out
+// The right-hand label on a row: its section, else its size, else what it is.
+function rowDetail(row) {
+  if (!row) return ""
+  if (row.kind === "playlist") {
+    if (String(row.section || "").length > 0) return String(row.section)
+    if (row.count > 0) return row.count + (row.count === 1 ? " track" : " tracks")
+    return ""
   }
-  var list = providerList(data)
-  if (!list || list.length === undefined) return out
-  for (var i = 0; i < list.length; i++) {
-    var p = list[i]
-    if (!p || typeof p !== "object") continue
-    var key = String(p.key || p.id || "")
-    if (key.length === 0) continue
-    out.push({
-      key: key,
-      name: String(p.name || ""),
-      authed: p.authed === true || p.authenticated === true,
-      active: p.active === true || p.current === true || p.is_active === true
-    })
-  }
-  return out
+  return String(row.kind || "").toUpperCase()
 }
 
-
-// jobResultProviders unwraps the finished-job payload, string or object.
-function jobResultResults(result) {
-  if (typeof result === "string") {
-    try { return JSON.parse(result) } catch (e) { return null }
-  }
-  return result && typeof result === "object" ? result : null
-}
-
-function jobResultProviders(result) {
-  var jres = jobResultResults(result)
-  if (!jres) return null
-  if (jres.provider_statuses && jres.provider_statuses.length !== undefined) return jres.provider_statuses
-  if (jres.providers && jres.providers.length !== undefined) {
-    // The legacy rows carry no auth state; prefer statuses when present.
-    return jres.provider_statuses && jres.provider_statuses.length !== undefined ? jres.provider_statuses : jres.providers
-  }
-  return null
-}
-function providerList(data) {
-  if (!data || typeof data !== "object") return null
-  // A --wait job answers with the payload under job.result.
-  if (data.job && typeof data.job === "object" && data.job.result) {
-    var fromJob = jobResultProviders(data.job.result)
-    if (fromJob) return fromJob
-  }
-  if (data.provider_statuses && data.provider_statuses.length !== undefined) return data.provider_statuses
-  if (data.providers && data.providers.length !== undefined) return data.providers
-  if (data.length !== undefined) return data
-  var nestedKeys = ["result", "data", "value", "provider_statuses"]
-  for (var i = 0; i < nestedKeys.length; i++) {
-    var nested = data[nestedKeys[i]]
-    if (nested && typeof nested === "object") {
-      if (nested.provider_statuses && nested.provider_statuses.length !== undefined) return nested.provider_statuses
-      if (nested.providers && nested.providers.length !== undefined) return nested.providers
-      if (nested.length !== undefined) return nested
-    }
-  }
-  return null
-}
-
-// One footer line: "navidrome: authed · radio: active". An empty string hides the
-// line in the panel, which is also the answer a daemon without providers gives.
-function providerSummary(providers) {
-  var list = providers && providers.length !== undefined ? providers : []
-  var parts = []
-  for (var i = 0; i < list.length; i++) {
-    var p = list[i]
-    if (!p) continue
-    var key = String(p.key || "")
-    if (key.length === 0) continue
-    var state = p.authed === true ? "authed" : ""
-    if (p.active === true) state = state.length > 0 ? state + " · active" : "active"
-    parts.push(state.length > 0 ? key + ": " + state : key)
-  }
-  return parts.join(" · ")
-}
-
-// The CLI argument forms for the ops the daemon adds. The station verbs are wired as
-// subcommands, the way history and load are. The parameterised ops travel through the
-// remote passthrough, which sends them to the running daemon over its own socket.
-function stationListArgs() {
-  return ["station", "list"]
-}
-
-function stationPlayArgs(id) {
-  return ["station", "play", String(id)]
-}
-
-function historyPlayArgs() {
-  return ["remote", "call", "--wait", "history.play", "--params", "{\"index\":0}"]
-}
-
-function providerListArgs() {
-  return ["remote", "call", "--wait", "provider.list"]
-}
-
-function providerSwitchArgs(key) {
-  var payload = typeof key === "string" && key.length > 0 ? {key: key} : {}
-  return ["remote", "call", "--wait", "provider.switch", "--params", JSON.stringify(payload)]
+function hiddenNote(providerKey, hidden) {
+  if (!(hidden > 0)) return ""
+  if (providerKey === "spotify")
+    return hidden + (hidden === 1 ? " followed playlist is" : " followed playlists are")
+      + " hidden. Spotify does not let cliamp read playlists you do not own."
+  return hidden + " rows hidden."
 }
 
 function trim(text) {
@@ -682,114 +761,4 @@ function elideError(raw) {
   var text = String(raw || "").replace(/\s+/g, " ").trim()
   if (text.length <= MAX_ERROR_CHARS) return text
   return text.slice(0, MAX_ERROR_CHARS)
-}
-
-// ---- provider search (fork) ----
-
-// The v2 provider.search answer, dug out of the --wait job envelope the same
-// way the provider list is. Only rows that carry a playable path are kept:
-// the panel plays them with track.play, no second lookup.
-function parseProviderSearch(raw, providerKey) {
-  var out = []
-  var data = jobPayload(raw)
-  if (!data) return out
-  var tracks = null
-  if (data.tracks && data.tracks.length !== undefined) tracks = data.tracks
-  if (!tracks && data.result && data.result.tracks && data.result.tracks.length !== undefined) tracks = data.result.tracks
-  if (!tracks || tracks.length === undefined) return out
-  for (var i = 0; i < tracks.length; i++) {
-    var t = tracks[i]
-    if (!t || typeof t !== "object") continue
-    var path = String(t.path || "")
-    var id = String(t.id || "")
-    if (path.length === 0 && id.length === 0) continue
-    var prov = String(t.provider || providerKey || "spotify")
-    if (path.length === 0 && id.length > 0 && prov === "spotify") path = "spotify:track:" + id
-    if (path.length === 0) continue
-    out.push({
-      kind: "song",
-      id: id,
-      uri: path,
-      name: String(t.title || t.name || ""),
-      artist: String(t.artist || ""),
-      album: String(t.album || ""),
-      duration: numberOr(t.duration, 0)
-    })
-  }
-  return out
-}
-
-function jobPayload(raw) {
-  var text = String(raw || "").trim()
-  if (text.length === 0) return null
-  var data = null
-  try { data = JSON.parse(text) } catch (e) { return null }
-  if (!data || typeof data !== "object") return null
-  if (data.job && data.job.result) {
-    var inner = data.job.result
-    if (typeof inner === "string") {
-      try { inner = JSON.parse(inner) } catch (e2) { inner = null }
-    }
-    if (inner && typeof inner === "object") return inner
-  }
-  if (data.result && typeof data.result === "object") {
-    var res = data.result
-    if (typeof res === "string") {
-      try { res = JSON.parse(res) } catch (e3) { return data }
-    }
-    if (res && typeof res === "object") {
-      if (res.tracks && res.tracks.length !== undefined) return res
-      var fromJob = data.job && data.job.result
-      if (fromJob && typeof fromJob === "object") return fromJob
-    }
-  }
-  return data
-}
-
-function parseProviderPlaylists(raw) {
-  var out = []
-  var data = jobPayload(raw)
-  if (!data) return out
-  var list = data.playlists
-  if (!list || list.length === undefined) return out
-  for (var i = 0; i < list.length; i++) {
-    var p = list[i]
-    if (!p || !p.id) continue
-    out.push({
-      id: String(p.id),
-      name: String(p.name || p.id),
-      artist: String(p.section || ""),
-      kind: "playlist",
-      songCount: numberOr(p.track_count, 0)
-    })
-  }
-  return out
-}
-
-function providerPlaylistArgs(key) {
-  return ["remote", "call", "--wait", "provider.playlists", "--params",
-    JSON.stringify({provider: String(key || ""), limit: 50})]
-}
-
-function providerLoadArgs(key, id) {
-  return ["remote", "call", "--wait", "provider.load", "--params",
-    JSON.stringify({provider: String(key || ""), playlist: String(id || "")})]
-}
-
-function providerSearchArgs(key, query) {
-  var payload = {
-    provider: String(key || ""),
-    query: String(query || ""),
-    limit: 30
-  }
-  return ["remote", "call", "--wait", "provider.search", "--params", JSON.stringify(payload)]
-}
-
-function trackPlayArgs(row) {
-  var track = {
-    path: String(row && row.uri || ""),
-    title: String(row && row.name || ""),
-    artist: String(row && row.artist || "")
-  }
-  return ["remote", "call", "--wait", "track.play", "--params", JSON.stringify({track: track})]
 }

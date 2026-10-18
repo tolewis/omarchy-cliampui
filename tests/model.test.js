@@ -60,10 +60,13 @@ const sp = Model.parseSnapshot({state: "playing", track: {title: "Dance Monkey",
 check("provider art is read", sp.artUrl, "https://i.scdn.co/image/ab67")
 check("the track duration fills a missing snapshot duration", sp.durationSec, 209)
 
-// A live station names the song in stream_title.
-const live = Model.parseSnapshot({state: "playing", track: {title: "Lofi", path: "https://radio.cliamp.stream/lofi/stream", stream: true, stream_title: "Artist - Song"}})
-check("a live station shows the song", live.title, "Artist - Song")
-check("and names itself as the artist", live.artist, "Lofi")
+// Byte for byte from a Radio Browser station on 2.3.0: cliamp splits the ICY title.
+const live = Model.parseSnapshot({state: "playing", track: {title: "Adroit Jazz Underground on walmradio.com", artist: "Shabazi by Omer Avital", path: "https://icecast.walmradio.com:8443/jazz", index: 14, stream: true, stream_title: "Shabazi by Omer Avital - Adroit Jazz Underground on walmradio.com", station: "Adroit Jazz Underground", realtime: true}})
+check("a live station shows the song", live.title, "Shabazi by Omer Avital")
+check("and names the station under it", live.artist, "Adroit Jazz Underground")
+check("the index is read from the track when the snapshot omits it", live.index, 14)
+const unsplit = Model.parseSnapshot({state: "playing", track: {title: "Lofi", path: "https://radio.cliamp.stream/lofi/stream", stream: true, stream_title: "Artist - Song"}})
+check("an unsplit stream title is shown whole", unsplit.title, "Artist - Song")
 
 // Measured: a daemon with nothing loaded omits track, index and total.
 const empty = Model.parseStatus('{"version":2,"id":"c","ok":true,"snapshot":{"revision":1,"playlist_revision":0,"state":"stopped","seekable":false,"index":-1,"shuffle":false,"repeat":"Off","mono":false,"speed":1,"eq_preset":"Custom","eq_bands":[0,0,0,0,0,0,0,0,0,0],"visualizer":"Bars"}}')
@@ -357,6 +360,8 @@ check("a channel shows its size", Model.rowDetail(channels.rows[1]), "48 tracks"
 const status = Model.parseStatus(ncs)
 check("the playing channel is found by the snapshot playlist", Model.activeRowIndex(channels.rows, status), 1)
 check("EDM is not marked when NCS plays", Model.rowIsActive(channels.rows[0], status), false)
+check("an empty loaded playlist is not marked", Model.rowIsActive({kind: "playlist", provider: "local", id: "Favorites"}, {playlist: "local:Favorites", total: 0}), false)
+check("a station played on its own unmarks the playlist", Model.rowIsActive(channels.rows[1], status, status.path), false)
 check("playlist ref splits at the first colon", Model.playlistRef("spotify:spotify:album:4eL"), {provider: "spotify", id: "spotify:album:4eL"})
 check("an empty ref", Model.playlistRef(""), {provider: "", id: ""})
 

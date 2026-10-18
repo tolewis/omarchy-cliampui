@@ -195,7 +195,7 @@ Item {
   // an earlier operation runs, so a fast second click is never lost.
   function submit(operation, params, onDone) {
     if (!ipcConnected) {
-      if (onDone) onDone({ state: "failed", error: { message: "cliamp is not running" } })
+      _finishJob({ state: "failed", operation: operation, error: { message: "cliamp is not running" } }, onDone)
       return false
     }
     var sent = request("operation.submit", { operation: operation, params: params || {} }, function (reply) {
@@ -237,7 +237,7 @@ Item {
     pendingJobCount = 0
     for (var key in jobs) {
       var entry = jobs[key]
-      if (entry && entry.done) entry.done({ state: "failed", error: { message: reason } }, reason)
+      if (entry) _finishJob({ state: "failed", operation: entry.operation, error: { message: reason } }, entry.done)
     }
   }
 
@@ -255,7 +255,7 @@ Item {
         var entry = jobs[key]
         if (now - entry.since > 60000) {
           delete jobs[key]
-          if (entry.done) entry.done({ state: "failed", error: { message: "cliamp did not finish " + entry.operation } }, "timed out")
+          root._finishJob({ state: "failed", operation: entry.operation, error: { message: "cliamp did not finish " + entry.operation } }, entry.done)
           continue
         }
         if (now - entry.since < 1000) continue
@@ -311,17 +311,8 @@ Item {
       path: root.socketPath
       connected: true
 
-      onConnectionStateChanged: {
-        if (connected) {
-          // A new connection may be a new daemon whose revisions start again at 1.
-          root.status = Object.assign({}, root.status, { revision: 0 })
-          root.refreshStatus()
-          root.readProviders()
-          return
-        }
-        root._failAllJobs("cliamp disconnected")
-        root.dropLyricsRequest()
-      }
+      // Handled on the root's ipcConnected, which is only true once this Socket is the
+      // Loader's item. Writing from here ran before that and was silently lost.
 
       parser: SplitParser {
         splitMarker: "\n"
@@ -365,8 +356,17 @@ Item {
   }
 
   onIpcConnectedChanged: {
-    if (ipcConnected) goneTimer.stop()
-    else goneTimer.restart()
+    if (ipcConnected) {
+      goneTimer.stop()
+      // A new connection may be a new daemon whose revisions start again at 1.
+      status = Object.assign({}, status, { revision: 0 })
+      refreshStatus()
+      readProviders()
+      return
+    }
+    goneTimer.restart()
+    _failAllJobs("cliamp disconnected")
+    dropLyricsRequest()
   }
 
   // The socket drops briefly whenever the daemon restarts. Blanking the artwork and
@@ -406,6 +406,36 @@ Item {
     return false
   }
 
+  // Measured on 2.3.0: after the daemon sits idle its Spotify connection goes stale,
+  // and the first play fails with "broken pipe" in cliamp.log while the job itself
+  // succeeds. The second attempt plays. So a start is watched: one quiet retry, and
+  // then a sentence instead of silence.
+  property string _startLabel: ""
+  property int _startTries: 0
+
+  function watchStart(label) {
+    _startLabel = String(label || "")
+    _startTries = 0
+    startWatch.restart()
+  }
+
+  Timer {
+    id: startWatch
+    interval: 3500
+    repeat: false
+    onTriggered: {
+      if (root.status.state === "playing" || root.status.state === "paused") return
+      if (root._startTries === 0) {
+        root._startTries = 1
+        root.submit("play", {}, null)
+        restart()
+        return
+      }
+      var what = root._startLabel.length > 0 ? root._startLabel : "the track"
+      root.showNotice("cliamp could not start " + what + ". Press play to try again.")
+    }
+  }
+
   function playPause() {
     if (!ipcConnected) {
       if (player) player.togglePlaying()
@@ -419,6 +449,7 @@ Item {
     }
     pendingPlaying = isPlaying ? 0 : 1
     playHold.restart()
+    if (!isPlaying) watchStart(title)
     transport(isPlaying ? "pause" : "play")
   }
 
@@ -430,7 +461,7 @@ Item {
     if (!transport("prev") && player) player.previous()
   }
 
-  function stop() { transport("stop") }
+  function stop() { startWatch.stop(); transport("stop") }
 
   function toggleShuffle() { transport("shuffle") }
 
@@ -852,7 +883,8 @@ Item {
   property int _searchSeq: 0
 
   readonly property var visibleSourceRows: searchRows.concat(Model.filterRows(sourceRows, sourceQuery))
-  readonly property int activeSourceIndex: Model.activeRowIndex(visibleSourceRows, status)
+  readonly property int activeSourceIndex: Model.activeRowIndex(visibleSourceRows, status, soloPath)
+  property string soloPath: ""
 
   // The row a click is loading. The latest click owns it, so a stale answer to an
   // earlier click can neither clear it nor report an error over it.
@@ -940,7 +972,9 @@ Item {
       if (root.loadingKey !== key) return
       root.loadingKey = ""
       if (err.length > 0) { root.sourceError = "Could not play " + name + ". " + err; return }
-      if (Model.loadedNothing(job)) root.sourceError = name + " has no tracks to play."
+      root.soloPath = req.operation === "track.play" ? String(row.id || "") : ""
+      if (Model.loadedNothing(job)) { root.sourceError = name + " has no tracks to play."; return }
+      root.watchStart(name)
     })
   }
 
@@ -1064,7 +1098,8 @@ Item {
     var label = String(name)
     submit("load", { playlist: label }, function (job, err) {
       if (err.length > 0) { root.showNotice("Could not load " + label + ". " + err); return }
-      if (Model.loadedNothing(job)) root.showNotice(label + " has no tracks to play.")
+      if (Model.loadedNothing(job)) { root.showNotice(label + " has no tracks to play."); return }
+      root.watchStart(label)
     })
   }
 

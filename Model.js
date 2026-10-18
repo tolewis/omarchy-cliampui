@@ -134,12 +134,18 @@ function parseSnapshot(snapshot) {
 
   var track = snapshot.track
   if (track && typeof track === "object") {
-    out.index = numberOr(snapshot.index, 0)
-    // A live station names the song in stream_title and itself in title.
+    out.index = numberOr(snapshot.index, numberOr(track.index, 0))
+    // Measured on a Radio Browser station: cliamp splits the ICY title, so artist holds
+    // the song, title holds the station, and stream_title holds both. The song is the
+    // title here and the station is the line under it.
     var streamTitle = String(track.stream_title || "")
-    out.title = streamTitle.length > 0 ? streamTitle : String(track.title || "")
-    out.artist = String(track.artist || "")
-    if (streamTitle.length > 0 && out.artist.length === 0) out.artist = String(track.station || track.title || "")
+    if (streamTitle.length > 0) {
+      out.title = String(track.artist || "") || streamTitle
+      out.artist = String(track.station || track.title || "")
+    } else {
+      out.title = String(track.title || "")
+      out.artist = String(track.artist || "")
+    }
     out.album = String(track.album || "")
     out.path = String(track.path || "")
     out.isStream = track.stream === true
@@ -600,19 +606,25 @@ function loadedNothing(job) {
   return numberOr(job.snapshot.total, 0) === 0
 }
 
-function rowIsActive(row, status) {
+// soloPath is the track last played on its own with track.play. cliamp inserts it into
+// the queue and keeps the playlist name, so while it plays no playlist row is active.
+function rowIsActive(row, status, soloPath) {
   if (!row || !status) return false
+  var path = String(status.path || "")
   if (row.kind === "track" || row.kind === "station") {
-    return String(status.path || "").length > 0 && String(status.path) === String(row.id || "")
+    return path.length > 0 && path === String(row.id || "")
   }
+  if (path.length > 0 && path === String(soloPath || "")) return false
+  // An empty playlist loads, and the previous track plays on, so it is not "playing".
+  if (numberOr(status.total, 0) === 0) return false
   var ref = playlistRef(status.playlist)
   return ref.provider === String(row.provider || "") && ref.id === String(row.id || "")
 }
 
-function activeRowIndex(rows, status) {
+function activeRowIndex(rows, status, soloPath) {
   var list = rows && rows.length !== undefined ? rows : []
   for (var i = 0; i < list.length; i++) {
-    if (rowIsActive(list[i], status)) return i
+    if (rowIsActive(list[i], status, soloPath)) return i
   }
   return -1
 }

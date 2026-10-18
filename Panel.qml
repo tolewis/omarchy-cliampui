@@ -87,6 +87,11 @@ Panel {
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
     function playpause(): string { cliamp.playPause(); return "ok" }
+    function next(): string { cliamp.next(); return "ok" }
+    function previous(): string { cliamp.previous(); return "ok" }
+    // Channel up and down for a keybinding, the same step as [ and ] in the panel.
+    function nextsource(): string { cliamp.stepSource(1); return "ok" }
+    function prevsource(): string { cliamp.stepSource(-1); return "ok" }
     function signal(): string { return cliamp.signalVerdict.text }
     function output(): string {
       root.sheetOpen = !root.sheetOpen
@@ -130,7 +135,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(560))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(760))
 
     PanelKeyCatcher {
       id: keyCatcher

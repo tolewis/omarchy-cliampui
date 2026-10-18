@@ -39,7 +39,17 @@ Column {
   visible: providers.length > 0
   spacing: Style.space(8)
 
-  onRowsChanged: if (cursorIndex >= rows.length) cursorIndex = rows.length > 0 ? 0 : -1
+  onRowsChanged: {
+    if (cursorIndex >= rows.length) cursorIndex = rows.length > 0 ? 0 : -1
+    Qt.callLater(showActive)
+  }
+  onActiveIndexChanged: Qt.callLater(showActive)
+
+  // The playing row is scrolled into view, unless the keyboard cursor is in the list.
+  function showActive() {
+    if (cursorIndex >= 0 || activeIndex < 0 || activeIndex >= rows.length) return
+    sourceList.positionViewAtIndex(activeIndex, ListView.Contain)
+  }
 
   function moveCursor(delta) {
     if (rows.length === 0) return
@@ -52,8 +62,6 @@ Column {
     if (cursorIndex < 0 || cursorIndex >= rows.length) return
     service.playSource(rows[cursorIndex])
   }
-
-  function focusSearch() { filterField.forceActiveFocus() }
 
   PanelSeparator {
     width: parent.width

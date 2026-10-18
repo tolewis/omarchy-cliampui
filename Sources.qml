@@ -120,6 +120,7 @@ Column {
         implicitHeight: chipLabel.implicitHeight + Style.space(8)
 
         MouseArea {
+          preventStealing: true
           anchors.fill: parent
           hoverEnabled: true
           cursorShape: Qt.PointingHandCursor
@@ -206,6 +207,7 @@ Column {
     font.pixelSize: Style.font.caption
 
     MouseArea {
+      preventStealing: true
       anchors.fill: parent
       cursorShape: Qt.PointingHandCursor
       visible: !!(root.service && root.service.sourceError.length > 0)
@@ -226,7 +228,7 @@ Column {
     keyNavigationEnabled: false
     boundsBehavior: Flickable.StopAtBounds
     interactive: contentHeight > height
-    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; interactive: false }
 
     delegate: CursorSurface {
       id: sourceRow
@@ -243,6 +245,7 @@ Column {
       implicitHeight: sourceLabel.implicitHeight + Style.spacing.rowPaddingX
 
       MouseArea {
+        preventStealing: true
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor

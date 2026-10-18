@@ -106,6 +106,9 @@ Item {
 
   MouseArea {
     id: mouse
+    preventStealing: true
+    // Above the button's own items, so the press is never lost to a sibling.
+    z: 2
     anchors.fill: parent
     hoverEnabled: true
     enabled: root.enabled

@@ -230,6 +230,7 @@ Column {
       }
 
       MouseArea {
+        preventStealing: true
         id: scrubArea
         anchors.fill: parent
         anchors.topMargin: -Style.space(8)

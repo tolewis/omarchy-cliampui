@@ -80,6 +80,7 @@ Column {
     implicitHeight: summaryLabel.implicitHeight + Style.spacing.rowPaddingX
 
     MouseArea {
+      preventStealing: true
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
@@ -167,7 +168,7 @@ Column {
       keyNavigationEnabled: false
       boundsBehavior: Flickable.StopAtBounds
       interactive: contentHeight > height
-      ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+      ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; interactive: false }
 
       // currentIndex is deliberately not bound to the panel's cursor. ListView writes
       // that property itself on every model swap, which breaks a QML binding for good
@@ -184,6 +185,7 @@ Column {
         implicitHeight: albumLabel.implicitHeight + Style.spacing.rowPaddingX
 
         MouseArea {
+          preventStealing: true
           anchors.fill: parent
           hoverEnabled: true
           cursorShape: Qt.PointingHandCursor
@@ -244,6 +246,7 @@ Column {
     implicitHeight: startLabel.implicitHeight + Style.spacing.rowPaddingX
 
     MouseArea {
+      preventStealing: true
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
